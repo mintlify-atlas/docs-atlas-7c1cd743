@@ -1,0 +1,99 @@
+{
+  "projectType": "api-service",
+  "projectName": "BookMe",
+  "projectDescription": "Meeting room reservation backend API for Hive Helsinki with OAuth2 authentication and Google Calendar integration",
+  "theme": "aspen",
+  "primaryColor": "#0066CC",
+  "lightColor": "#E6F2FF",
+  "darkColor": "#003366",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Setup & Configuration",
+            "pages": [
+              "setup/installation",
+              "setup/environment",
+              "setup/database",
+              "setup/oauth-setup",
+              "setup/email-configuration",
+              "setup/google-calendar"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/authentication",
+              "concepts/authorization",
+              "concepts/business-rules"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication-flow",
+              "api/rate-limiting",
+              "api/error-handling"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/endpoints/health",
+              "api/endpoints/oauth",
+              "api/endpoints/reservations"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Developer Guide",
+            "pages": [
+              "development/project-structure",
+              "development/building",
+              "development/testing",
+              "development/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "42 Intra OAuth2 Authentication",
+    "Role-based Access Control (Staff/Student)",
+    "Smart Booking Logic with Overlap Prevention",
+    "Google Calendar Integration for Staff",
+    "Email Notifications via SMTP",
+    "Rate Limiting Protection",
+    "JWT-based Session Management",
+    "PostgreSQL with Type-safe SQLC Queries"
+  ],
+  "publicApiSurface": [
+    "GET /oauth/login",
+    "GET /oauth/callback",
+    "POST /api/v1/reservations",
+    "GET /api/v1/reservations",
+    "DELETE /api/v1/reservations/{id}",
+    "GET /api/v1/health"
+  ]
+}
