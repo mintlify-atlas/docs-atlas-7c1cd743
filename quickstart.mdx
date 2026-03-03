@@ -1,80 +1,489 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with BookMe API in under 5 minutes
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have the following installed:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Go 1.22+" icon="golang">
+    Download from [go.dev/dl](https://go.dev/dl/)
+  </Card>
+  <Card title="PostgreSQL 14+" icon="database">
+    Install from [postgresql.org](https://www.postgresql.org/download/)
+  </Card>
+  <Card title="Goose" icon="feather">
+    Migration tool: `go install github.com/pressly/goose/v3/cmd/goose@latest`
+  </Card>
+  <Card title="42 Intra Account" icon="shield">
+    Required for OAuth2 authentication at Hive Helsinki
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/IbnBaqqi/book-me.git
+    cd book-me
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    go mod download
+    ```
+    
+    This downloads all required Go packages including:
+    - `github.com/golang-jwt/jwt/v5` for JWT authentication
+    - `github.com/lib/pq` for PostgreSQL connection
+    - `golang.org/x/time/rate` for rate limiting
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the example environment file and fill in your credentials:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` with your configuration:
+    
+    ```bash .env
+    # Server Configuration
+    PORT=8080
+    SERVER_READ_TIMEOUT=15s
+    SERVER_WRITE_TIMEOUT=15s
+    SERVER_IDLE_TIMEOUT=60s
+    LOG_LEVEL=info
+    
+    # App Configuration
+    ENV=development
+    DB_URL=postgres://user:password@localhost:5432/bookme?sslmode=disable
+    
+    # 42 Intra OAuth2
+    CLIENT_ID=your_42_client_id
+    SECRET=your_42_secret
+    REDIRECT_URI=http://localhost:8080/oauth/callback
+    OAUTH_AUTH_URI=https://api.intra.42.fr/oauth/authorize
+    OAUTH_TOKEN_URI=https://api.intra.42.fr/oauth/token
+    USER_INFO_URL=https://api.intra.42.fr/v2/me
+    
+    # JWT Configuration
+    JWT_SECRET=your_jwt_secret_here
+    
+    # Email Configuration (Optional)
+    SMTP_HOST=smtp.gmail.com
+    SMTP_PORT=587
+    SMTP_USERNAME=your_email@gmail.com
+    SMTP_PASSWORD=your_app_password
+    FROM_EMAIL=noreply@hive.fi
+    FROM_NAME=BookMe
+    SMTP_USE_TLS=true
+    
+    # Google Calendar (Optional - Staff only)
+    GOOGLE_CREDENTIALS_FILE=./assets/book-me-service-account.json
+    GOOGLE_CALENDAR_SCOPE=https://www.googleapis.com/auth/calendar
+    GOOGLE_CALENDAR_ID=your_calendar_id@group.calendar.google.com
+    ```
+    
+    <Warning>
+      Never commit your `.env` file to version control. The `.gitignore` file is already configured to exclude it.
+    </Warning>
+  </Step>
+
+  <Step title="Set up the database">
+    Create a PostgreSQL database:
+    
+    ```bash
+    createdb bookme
+    ```
+    
+    Run migrations to create tables:
+    
+    ```bash
+    goose -dir sql/schema postgres "postgres://user:password@localhost:5432/bookme?sslmode=disable" up
+    ```
+    
+    This creates three tables:
+    - `users` - Stores user accounts from 42 Intra
+    - `rooms` - Contains available meeting rooms (big, small)
+    - `reservations` - Tracks all bookings
+    
+    <Info>
+      The migration automatically populates two rooms: "big" and "small". These are the meeting rooms at Hive Helsinki.
+    </Info>
+  </Step>
+
+  <Step title="Start the server">
+    Run the development server:
+    
+    ```bash
+    make run
+    ```
+    
+    Or with hot reload (requires [Air](https://github.com/cosmtrek/air)):
+    
+    ```bash
+    make dev
+    ```
+    
+    You should see output like:
+    
+    ```
+    2024-03-03T10:30:00Z INFO starting book-me server port=8080 log_level=info
+    2024-03-03T10:30:00Z INFO Server listening address=:8080
+    ```
+  </Step>
+</Steps>
+
+## Make Your First API Call
+
+<Steps>
+  <Step title="Check server health">
+    Verify the server is running:
+    
+    ```bash
+    curl http://localhost:8080/api/v1/health
+    ```
+    
+    Expected response:
+    
+    ```json
+    {
+      "status": "ok"
+    }
+    ```
+  </Step>
+
+  <Step title="Authenticate with 42 Intra">
+    Open your browser and navigate to:
+    
+    ```
+    http://localhost:8080/oauth/login
+    ```
+    
+    This redirects you to 42 Intra for authentication. After successful login, you'll be redirected back with a JWT token in the response.
+    
+    <Note>
+      The JWT token is valid for 1 hour. After expiration, you'll need to re-authenticate.
+    </Note>
+  </Step>
+
+  <Step title="Create a reservation">
+    Use your JWT token to create a reservation:
+    
+    ```bash
+    curl -X POST http://localhost:8080/api/v1/reservations \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "roomId": 1,
+        "startTime": "2024-03-04T10:00:00Z",
+        "endTime": "2024-03-04T11:00:00Z"
+      }'
+    ```
+    
+    Successful response:
+    
+    ```json
+    {
+      "Id": 1,
+      "roomId": 1,
+      "startTime": "2024-03-04T10:00:00Z",
+      "endTime": "2024-03-04T11:00:00Z",
+      "createdBy": {
+        "Id": 42,
+        "name": "John Doe"
+      }
+    }
+    ```
+    
+    <Tip>
+      Times must be in UTC format and fall within school hours. The API validates both constraints automatically.
+    </Tip>
+  </Step>
+
+  <Step title="View reservations">
+    Get all unavailable time slots for a date range:
+    
+    ```bash
+    curl -X GET "http://localhost:8080/api/v1/reservations?start=2024-03-01&end=2024-03-31" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN"
+    ```
+    
+    Response format:
+    
+    ```json
+    [
+      {
+        "roomId": 1,
+        "roomName": "big",
+        "slots": [
+          {
+            "id": 1,
+            "startTime": "2024-03-04T10:00:00Z",
+            "endTime": "2024-03-04T11:00:00Z",
+            "bookedBy": "John Doe"
+          }
+        ]
+      }
+    ]
+    ```
+    
+    <Info>
+      The `bookedBy` field is only visible to staff members. Students see `null` for privacy.
+    </Info>
+  </Step>
+
+  <Step title="Cancel a reservation">
+    Delete a reservation by ID:
+    
+    ```bash
+    curl -X DELETE http://localhost:8080/api/v1/reservations/1 \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN"
+    ```
+    
+    Success returns HTTP 204 No Content.
+    
+    <Warning>
+      Students can only cancel their own reservations. Staff can cancel any reservation.
+    </Warning>
+  </Step>
+</Steps>
+
+## Code Examples
+
+<CodeGroup>
+
+```go Go
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+type CreateReservationRequest struct {
+	RoomID    int64     `json:"roomId"`
+	StartTime time.Time `json:"startTime"`
+	EndTime   time.Time `json:"endTime"`
+}
+
+func createReservation(token string) error {
+	req := CreateReservationRequest{
+		RoomID:    1,
+		StartTime: time.Now().Add(24 * time.Hour).UTC(),
+		EndTime:   time.Now().Add(25 * time.Hour).UTC(),
+	}
+
+	body, _ := json.Marshal(req)
+	httpReq, _ := http.NewRequest(
+		"POST",
+		"http://localhost:8080/api/v1/reservations",
+		bytes.NewBuffer(body),
+	)
+
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	responseBody, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(responseBody))
+	return nil
+}
+```
+
+```python Python
+import requests
+from datetime import datetime, timedelta
+
+def create_reservation(token: str):
+    url = "http://localhost:8080/api/v1/reservations"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    start_time = (datetime.utcnow() + timedelta(days=1)).isoformat() + "Z"
+    end_time = (datetime.utcnow() + timedelta(days=1, hours=1)).isoformat() + "Z"
+    
+    data = {
+        "roomId": 1,
+        "startTime": start_time,
+        "endTime": end_time
+    }
+    
+    response = requests.post(url, json=data, headers=headers)
+    return response.json()
+
+# Usage
+token = "your_jwt_token_here"
+reservation = create_reservation(token)
+print(reservation)
+```
+
+```javascript JavaScript
+const createReservation = async (token) => {
+  const response = await fetch('http://localhost:8080/api/v1/reservations', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      roomId: 1,
+      startTime: new Date(Date.now() + 86400000).toISOString(),
+      endTime: new Date(Date.now() + 90000000).toISOString()
+    })
+  });
+  
+  return await response.json();
+};
+
+// Usage
+const token = 'your_jwt_token_here';
+createReservation(token)
+  .then(data => console.log(data))
+  .catch(err => console.error(err));
+```
+
+```bash cURL
+# Set your token as an environment variable
+export JWT_TOKEN="your_jwt_token_here"
+
+# Create a reservation
+curl -X POST http://localhost:8080/api/v1/reservations \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "roomId": 1,
+    "startTime": "2024-03-04T10:00:00Z",
+    "endTime": "2024-03-04T11:00:00Z"
+  }'
+
+# Get reservations
+curl -X GET "http://localhost:8080/api/v1/reservations?start=2024-03-01&end=2024-03-31" \
+  -H "Authorization: Bearer $JWT_TOKEN"
+
+# Cancel a reservation
+curl -X DELETE http://localhost:8080/api/v1/reservations/1 \
+  -H "Authorization: Bearer $JWT_TOKEN"
+```
+
+</CodeGroup>
+
+## Rate Limiting
+
+BookMe implements rate limiting to prevent abuse:
+
+- **OAuth endpoints** (`/oauth/*`): 5 requests per 12 seconds
+- **API endpoints** (`/api/v1/*`): 30 requests per 2 seconds
+
+Exceeding these limits returns HTTP 429 Too Many Requests.
+
+<Info>
+  Rate limits are per-IP address and reset automatically after the time window.
+</Info>
+
+## Development Commands
+
+Useful Make commands for development:
+
+```bash
+# Run the server
+make run
+
+# Run with hot reload
+make dev
+
+# Build binary
+make build
+
+# Run tests
+make test
+
+# Run tests with coverage
+make test-coverage
+
+# Format code
+make fmt
+
+# Generate SQLC code after modifying SQL
+make sqlc
+
+# Clean build artifacts
+make clean
+```
+
+## Project Structure
+
+Understanding the codebase:
+
+```
+book-me/
+├── cmd/server/main.go          # Application entry point (cmd/server/main.go:22)
+├── internal/
+│   ├── api/                    # HTTP server setup
+│   │   ├── api.go             # Service initialization
+│   │   └── routes.go          # Route definitions (internal/api/routes.go:14)
+│   ├── handler/               # HTTP handlers
+│   │   ├── handler_reservations.go  # Reservation endpoints (internal/handler/handler_reservations.go:18)
+│   │   └── handler_oauth.go   # OAuth flow
+│   ├── service/               # Business logic
+│   ├── database/              # SQLC generated code
+│   ├── auth/                  # JWT authentication (internal/auth/auth.go:76)
+│   └── middleware/            # HTTP middleware
+└── sql/                       # Database migrations
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Authentication Guide"
+    icon="lock"
+    href="/api/authentication-flow"
+  >
+    Deep dive into 42 Intra OAuth2 and JWT authentication
+  </Card>
+  <Card
+    title="API Reference"
+    icon="book-open"
+    href="/api/overview"
+  >
+    Explore all endpoints with detailed examples
+  </Card>
+  <Card
+    title="Error Handling"
+    icon="triangle-exclamation"
+    href="/api/error-handling"
+  >
+    Learn about error codes and how to handle them
+  </Card>
+  <Card
+    title="Core Concepts"
+    icon="lightbulb"
+    href="/concepts/architecture"
+  >
+    Learn about BookMe's architecture and design
+  </Card>
+</CardGroup>
+
+<Tip>
+  Having issues? Check the [GitHub Issues](https://github.com/IbnBaqqi/book-me/issues) or open a new one.
+</Tip>

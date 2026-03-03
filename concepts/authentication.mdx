@@ -1,0 +1,376 @@
+---
+title: Authentication
+description: How BookMe authenticates users via 42 OAuth and JWT tokens
+---
+
+BookMe uses a two-phase authentication system: OAuth 2.0 for initial login and JWT tokens for API access.
+
+## Authentication Flow
+
+The complete authentication flow involves:
+
+1. **OAuth Login**: User authenticates via 42 Intranet
+2. **Token Issuance**: Server generates JWT access token
+3. **API Access**: Client includes JWT in subsequent requests
+
+```
+User → 42 OAuth → BookMe Server → JWT Token → Client
+                                        ↓
+                                  API Requests
+```
+
+## OAuth 2.0 Integration
+
+BookMe integrates with the 42 Network OAuth provider for initial authentication.
+
+### OAuth Configuration
+
+The OAuth client is configured in `internal/api/api.go:57`:
+
+```go
+oauthConfig := &oauth2.Config{
+    ClientID:     cfg.App.ClientID,
+    ClientSecret: cfg.App.ClientSecret,
+    RedirectURL:  cfg.App.RedirectURI,
+    Scopes:       []string{"public"},
+    Endpoint: oauth2.Endpoint{
+        AuthURL:  cfg.App.OAuthAuthURI,
+        TokenURL: cfg.App.OAuthTokenURI,
+    },
+}
+```
+
+<Warning>
+OAuth credentials (`CLIENT_ID`, `SECRET`) are sensitive. Never commit them to version control. Load them from environment variables.
+</Warning>
+
+### Login Flow
+
+**Step 1: Initiate Login** (`GET /oauth/login`)
+
+The OAuth service generates a random state token for CSRF protection:
+
+```go
+// From internal/oauth/service.go:32
+state := generateRandomState() // 256-bit cryptographically secure token
+
+// Store state in session cookie
+session.Values["oauth_state"] = state
+session.Save(r, w)
+
+// Redirect to 42 authorization page
+url := provider.config.AuthCodeURL(state)
+```
+
+**Step 2: OAuth Callback** (`GET /oauth/callback`)
+
+After user authorizes, 42 redirects back with authorization code:
+
+```go
+// From internal/oauth/service.go:53
+// 1. Validate state token (CSRF protection)
+expectedState := session.Values["oauth_state"]
+if expectedState != r.URL.Query().Get("state") {
+    return ErrInvalidOrMissingState
+}
+
+// 2. Exchange code for access token
+token, err := config.Exchange(r.Context(), code)
+
+// 3. Fetch user data from 42 API
+user42, err := Fetch42UserData(ctx, token)
+
+// 4. Validate campus affiliation
+isHive := false
+for _, camp := range user42.Campus {
+    if camp.ID == 13 && camp.Primary {
+        isHive = true
+        break
+    }
+}
+if !isHive {
+    return ErrInvalidCampus
+}
+
+// 5. Find or create user in database
+user, err := FindOrCreateUser(ctx, user42)
+```
+
+<Info>
+Only users whose primary campus is Hive Helsinki (campus ID 13) are allowed to register. This validation happens in `internal/oauth/provider42.go:75`.
+</Info>
+
+### User Creation
+
+If the user doesn't exist in the database, BookMe creates them automatically:
+
+```go
+// From internal/oauth/provider42.go:144
+role := service.RoleStudent
+if user42.Staff {
+    role = service.RoleStaff
+}
+
+user, err := db.CreateUser(ctx, database.CreateUserParams{
+    Email: user42.Email,
+    Name:  user42.Name,
+    Role:  role,
+})
+```
+
+Roles are assigned based on the `staff?` field from 42 API:
+- **STUDENT**: Regular students
+- **STAFF**: Hive staff members with elevated privileges
+
+### Retry Logic
+
+The 42 API integration includes automatic retry on transient failures:
+
+```go
+// From internal/oauth/provider42.go:114
+client := retryablehttp.NewClient()
+client.RetryMax = 3
+client.RetryWaitMin = 1 * time.Second
+client.RetryWaitMax = 5 * time.Second
+client.Backoff = retryablehttp.DefaultBackoff
+```
+
+This ensures temporary network issues don't break the authentication flow.
+
+## JWT Token System
+
+After successful OAuth authentication, BookMe issues a JWT access token.
+
+### Token Structure
+
+JWT tokens contain these claims (`internal/auth/auth.go:21`):
+
+```go
+type CustomClaims struct {
+    Name string `json:"name"` // User display name
+    Role string `json:"role"` // STUDENT or STAFF
+    jwt.RegisteredClaims
+}
+
+RegisteredClaims {
+    Subject:   "<user_id>"    // User ID as string
+    IssuedAt:  <timestamp>     // Token creation time
+    ExpiresAt: <timestamp>     // 1 hour from issuance
+    Issuer:    "access"        // Token type identifier
+}
+```
+
+### Token Issuance
+
+Tokens are created using HMAC-SHA256 signing:
+
+```go
+// From internal/auth/auth.go:77
+func (s *Service) IssueAccessToken(user database.User) (string, error) {
+    claims := CustomClaims{
+        Name: user.Name,
+        Role: user.Role,
+        RegisteredClaims: jwt.RegisteredClaims{
+            Subject:   strconv.FormatInt(user.ID, 10),
+            IssuedAt:  jwt.NewNumericDate(time.Now()),
+            ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.AccessTokenTTL)),
+            Issuer:    string(tokenTypeAccess),
+        },
+    }
+    
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    return token.SignedString([]byte(s.JwtSecret))
+}
+```
+
+<Note>
+Access tokens expire after 1 hour. The TTL is configured in `internal/auth/auth.go:72` as `AccessTokenTTL: time.Hour`.
+</Note>
+
+### Token Verification
+
+The authentication middleware verifies tokens on every protected request:
+
+```go
+// From internal/auth/auth.go:99
+func (s *Service) VerifyAccessToken(tokenStr string) (*CustomClaims, error) {
+    token, err := jwt.ParseWithClaims(
+        tokenStr,
+        &CustomClaims{},
+        func(token *jwt.Token) (any, error) {
+            // Enforce HMAC signing method
+            if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, ErrInvalidToken
+            }
+            return []byte(s.JwtSecret), nil
+        },
+    )
+    
+    if err != nil {
+        if errors.Is(err, jwt.ErrTokenExpired) {
+            return nil, ErrExpiredToken
+        }
+        return nil, ErrInvalidToken
+    }
+    
+    claims, ok := token.Claims.(*CustomClaims)
+    if !ok || !token.Valid {
+        return nil, ErrInvalidToken
+    }
+    
+    return claims, nil
+}
+```
+
+Verification checks:
+- Signature validity
+- Token expiration
+- Signing algorithm (must be HMAC)
+- Claims structure
+
+## Authentication Middleware
+
+BookMe uses two middleware layers for authentication:
+
+### Authenticate Middleware
+
+Extracts and validates JWT tokens, but allows requests to continue even without valid tokens:
+
+```go
+// From internal/middleware/auth.go:13
+func Authenticate(authService *auth.Service) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Extract Bearer token
+            tokenStr, err := auth.GetBearerToken(r.Header)
+            if err != nil {
+                // Log but continue without user
+                next.ServeHTTP(w, r)
+                return
+            }
+            
+            // Verify token
+            claims, err := authService.VerifyAccessToken(tokenStr)
+            if err != nil {
+                // Log but continue without user
+                next.ServeHTTP(w, r)
+                return
+            }
+            
+            // Add user to context
+            user := auth.User{
+                ID:   id,
+                Role: claims.Role,
+                Name: claims.Name,
+            }
+            ctx := auth.WithUser(r.Context(), user)
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+```
+
+### RequireAuth Middleware
+
+Enforces authentication by rejecting requests without a valid user in context:
+
+```go
+// From internal/middleware/auth.go:52
+func RequireAuth(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        user, ok := auth.UserFromContext(r.Context())
+        if !ok {
+            w.WriteHeader(http.StatusUnauthorized)
+            w.Write([]byte(`{"error":"unauthorized"}`))
+            return
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+```
+
+<Tip>
+Use `Authenticate` alone for endpoints that support optional authentication. Chain `Authenticate` + `RequireAuth` for protected endpoints that require authentication.
+</Tip>
+
+## Bearer Token Format
+
+Clients must include JWT tokens in the `Authorization` header:
+
+```http
+Authorization: Bearer <jwt_token>
+```
+
+Token extraction from headers (`internal/auth/auth.go:128`):
+
+```go
+func GetBearerToken(headers http.Header) (string, error) {
+    authHeader := headers.Get("Authorization")
+    if authHeader == "" {
+        return "", ErrNoAuthHeaderIncluded
+    }
+    
+    token, ok := strings.CutPrefix(authHeader, "Bearer ")
+    if !ok {
+        return "", ErrInvalidBearerToken
+    }
+    
+    if token == "" {
+        return "", ErrEmptyBearerToken
+    }
+    
+    return token, nil
+}
+```
+
+## Security Considerations
+
+### CSRF Protection
+
+The OAuth flow uses cryptographically secure random state tokens to prevent CSRF attacks. State tokens are:
+- Generated as 256-bit random values
+- Stored in secure session cookies
+- Validated on callback
+- Deleted after use
+
+### Token Security
+
+**Secret Management**
+- JWT secret (`JWT_SECRET`) must be at least 32 bytes
+- Never expose secrets in logs or error messages
+- Rotate secrets periodically in production
+
+**Token Expiration**
+- Access tokens expire after 1 hour
+- No refresh tokens (users re-authenticate via OAuth)
+- Expired tokens are rejected with `401 Unauthorized`
+
+**Algorithm Enforcement**
+- Only HMAC-SHA256 signing is accepted
+- Algorithm is validated during token verification
+- Prevents algorithm substitution attacks
+
+### Session Cookies
+
+OAuth state is stored in encrypted session cookies:
+
+```go
+// From internal/oauth/provider42.go:56
+session := sessions.NewCookieStore([]byte(sessionSecret))
+```
+
+<Warning>
+The `SESSION_SECRET` environment variable must be a strong, random value. It encrypts session cookies. If compromised, attackers could forge OAuth state tokens.
+</Warning>
+
+## Error Handling
+
+Authentication errors are clearly defined in `internal/auth/auth.go:49`:
+
+- `ErrInvalidToken`: Malformed or tampered token
+- `ErrExpiredToken`: Token past expiration time
+- `ErrEmptyBearerToken`: Authorization header present but empty
+- `ErrInvalidBearerToken`: Missing "Bearer " prefix
+- `ErrNoAuthHeaderIncluded`: No Authorization header
+
+All authentication failures return `401 Unauthorized` with a JSON error response.

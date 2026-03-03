@@ -1,0 +1,473 @@
+---
+title: "Reservations"
+description: "Create, view, and cancel meeting room reservations"
+---
+
+## POST /api/v1/reservations
+
+Create a new meeting room reservation. The system validates time slots, checks for conflicts, enforces business rules, and syncs with Google Calendar.
+
+### Authentication
+
+**Required**: JWT token via `Authorization: Bearer <token>` header
+
+### Rate Limiting
+
+- **Rate**: 30 requests per 2 seconds per IP
+- **Status Code on Limit**: 429 Too Many Requests
+
+### Request Body
+
+<ParamField body="roomId" type="integer" required>
+  The ID of the room to reserve. Must be greater than 0.
+</ParamField>
+
+<ParamField body="startTime" type="string" required>
+  ISO 8601 timestamp in UTC format. Must be:
+  - In the future
+  - Within school hours (6:00 AM - 8:00 PM)
+  - In UTC timezone
+  
+  Example: `2025-01-28T14:00:00Z`
+</ParamField>
+
+<ParamField body="endTime" type="string" required>
+  ISO 8601 timestamp in UTC format. Must be:
+  - After startTime
+  - Within school hours (6:00 AM - 8:00 PM)
+  - In UTC timezone
+  - Maximum duration:
+    - **Students**: 4 hours
+    - **Staff**: Unlimited
+  
+  Example: `2025-01-28T16:00:00Z`
+</ParamField>
+
+### Response
+
+**201 Created**
+
+<ResponseField name="Id" type="integer" required>
+  The unique identifier for the created reservation
+</ResponseField>
+
+<ResponseField name="roomId" type="integer" required>
+  The ID of the reserved room
+</ResponseField>
+
+<ResponseField name="startTime" type="string" required>
+  ISO 8601 timestamp of reservation start time in UTC
+</ResponseField>
+
+<ResponseField name="endTime" type="string" required>
+  ISO 8601 timestamp of reservation end time in UTC
+</ResponseField>
+
+<ResponseField name="createdBy" type="object" required>
+  Information about the user who created the reservation
+  
+  <Expandable title="User Object">
+    <ResponseField name="Id" type="integer">
+      User's unique identifier
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      User's display name
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+<ResponseField name="details" type="object">
+  Additional details for validation errors
+  
+  Contains field-level error messages for invalid input
+</ResponseField>
+
+**400 Bad Request** - Invalid request body
+
+```json
+{
+  "error": "Invalid request body"
+}
+```
+
+**400 Bad Request** - Validation errors
+
+```json
+{
+  "error": "validation failed",
+  "details": {
+    "roomId": "must be greater than 0",
+    "startTime": "must be in the future",
+    "endTime": "must be after start time"
+  }
+}
+```
+
+**400 Bad Request** - Exceeds maximum duration
+
+```json
+{
+  "error": "reservation exceeds maximum allowed duration"
+}
+```
+
+**401 Unauthorized** - Missing or invalid JWT token
+
+```json
+{
+  "error": "unauthorized"
+}
+```
+
+**404 Not Found** - Room does not exist
+
+```json
+{
+  "error": "room not found"
+}
+```
+
+**409 Conflict** - Time slot already booked
+
+```json
+{
+  "error": "this time slot is already booked"
+}
+```
+
+**500 Internal Server Error** - Server error
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+### Examples
+
+<CodeGroup>
+
+```bash Create Reservation
+curl -X POST http://localhost:8080/api/v1/reservations \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "roomId": 1,
+    "startTime": "2025-01-28T14:00:00Z",
+    "endTime": "2025-01-28T16:00:00Z"
+  }'
+```
+
+```json 201 Created
+{
+  "Id": 123,
+  "roomId": 1,
+  "startTime": "2025-01-28T14:00:00Z",
+  "endTime": "2025-01-28T16:00:00Z",
+  "createdBy": {
+    "Id": 42,
+    "name": "John Doe"
+  }
+}
+```
+
+</CodeGroup>
+
+### Business Rules
+
+- **Future Times Only**: Cannot book times in the past
+- **School Hours**: Bookings must be between 6:00 AM - 8:00 PM
+- **Duration Limits**:
+  - Students: Maximum 4 hours per reservation
+  - Staff: No duration limit
+- **Conflict Prevention**: System prevents overlapping reservations
+- **Email Notification**: Confirmation email sent automatically
+- **Calendar Sync**: Reservation added to Google Calendar
+
+Source: `internal/handler/handler_reservations.go:18`
+
+---
+
+## GET /api/v1/reservations
+
+Retrieve unavailable time slots for all rooms within a specified date range. Shows which time slots are booked, with privacy controls based on user role.
+
+### Authentication
+
+**Required**: JWT token via `Authorization: Bearer <token>` header
+
+### Rate Limiting
+
+- **Rate**: 30 requests per 2 seconds per IP
+- **Status Code on Limit**: 429 Too Many Requests
+
+### Query Parameters
+
+<ParamField query="start" type="string" required>
+  Start date in `YYYY-MM-DD` format
+  
+  Example: `2025-01-28`
+</ParamField>
+
+<ParamField query="end" type="string" required>
+  End date in `YYYY-MM-DD` format
+  
+  **Maximum range**: 60 days from start date
+  
+  Example: `2025-02-01`
+</ParamField>
+
+### Response
+
+**200 OK** - Array of rooms with their reserved slots
+
+<ResponseField name="roomId" type="integer" required>
+  The unique identifier of the room
+</ResponseField>
+
+<ResponseField name="roomName" type="string" required>
+  The name of the room
+</ResponseField>
+
+<ResponseField name="slots" type="array" required>
+  Array of reserved time slots for this room
+  
+  <Expandable title="Slot Object">
+    <ResponseField name="id" type="integer">
+      Reservation ID
+    </ResponseField>
+    
+    <ResponseField name="startTime" type="string">
+      ISO 8601 timestamp of slot start time in UTC
+    </ResponseField>
+    
+    <ResponseField name="endTime" type="string">
+      ISO 8601 timestamp of slot end time in UTC
+    </ResponseField>
+    
+    <ResponseField name="bookedBy" type="string | null">
+      Name of the user who booked the slot
+      
+      **Privacy rules**:
+      - Visible to: Booking owner and staff members
+      - Other users see: `null`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error Responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+<ResponseField name="details" type="object">
+  Additional details for validation errors
+</ResponseField>
+
+**400 Bad Request** - Invalid date format or range
+
+```json
+{
+  "error": "validation failed",
+  "details": {
+    "start": "invalid date format, expected YYYY-MM-DD",
+    "end": "date range cannot exceed 60 days"
+  }
+}
+```
+
+**401 Unauthorized** - Missing or invalid JWT token
+
+```json
+{
+  "error": "unauthorized"
+}
+```
+
+**500 Internal Server Error** - Server error
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+### Examples
+
+<CodeGroup>
+
+```bash Get Unavailable Slots
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  "http://localhost:8080/api/v1/reservations?start=2025-01-28&end=2025-02-01"
+```
+
+```json 200 OK - Staff/Owner View
+[
+  {
+    "roomId": 1,
+    "roomName": "Big Conference Room",
+    "slots": [
+      {
+        "id": 123,
+        "startTime": "2025-01-28T14:00:00Z",
+        "endTime": "2025-01-28T16:00:00Z",
+        "bookedBy": "John Doe"
+      },
+      {
+        "id": 124,
+        "startTime": "2025-01-29T14:00:00Z",
+        "endTime": "2025-01-29T16:00:00Z",
+        "bookedBy": "Jane Smith"
+      }
+    ]
+  }
+]
+```
+
+```json 200 OK - Other Users View
+[
+  {
+    "roomId": 1,
+    "roomName": "Big Conference Room",
+    "slots": [
+      {
+        "id": 123,
+        "startTime": "2025-01-28T14:00:00Z",
+        "endTime": "2025-01-28T16:00:00Z",
+        "bookedBy": null
+      },
+      {
+        "id": 124,
+        "startTime": "2025-01-29T14:00:00Z",
+        "endTime": "2025-01-29T16:00:00Z",
+        "bookedBy": null
+      }
+    ]
+  }
+]
+```
+
+</CodeGroup>
+
+### Privacy Rules
+
+Booking details (`bookedBy` field) are visible to:
+- The person who made the booking
+- Staff members
+
+Other users see time slots marked as booked with `bookedBy: null`.
+
+Source: `internal/handler/handler_reservations.go:73`
+
+---
+
+## DELETE /api/v1/reservations/{id}
+
+Cancel an existing reservation. Authorization rules apply based on user role.
+
+### Authentication
+
+**Required**: JWT token via `Authorization: Bearer <token>` header
+
+### Rate Limiting
+
+- **Rate**: 30 requests per 2 seconds per IP
+- **Status Code on Limit**: 429 Too Many Requests
+
+### Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The unique identifier of the reservation to cancel
+</ParamField>
+
+### Response
+
+**204 No Content** - Reservation successfully cancelled (no response body)
+
+### Error Responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+**400 Bad Request** - Invalid reservation ID
+
+```json
+{
+  "error": "validation failed",
+  "details": {
+    "id": "must be a valid integer"
+  }
+}
+```
+
+**401 Unauthorized** - Missing or invalid JWT token
+
+```json
+{
+  "error": "unauthorized"
+}
+```
+
+**403 Forbidden** - Not authorized to cancel this reservation
+
+```json
+{
+  "error": "unauthorized to cancel this reservation"
+}
+```
+
+**404 Not Found** - Reservation does not exist
+
+```json
+{
+  "error": "reservation not found"
+}
+```
+
+**500 Internal Server Error** - Server error
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+### Examples
+
+<CodeGroup>
+
+```bash Cancel Reservation
+curl -X DELETE http://localhost:8080/api/v1/reservations/123 \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```http 204 No Content
+HTTP/1.1 204 No Content
+```
+
+</CodeGroup>
+
+### Authorization Rules
+
+Users can cancel a reservation if:
+- They created the reservation themselves, OR
+- They have a **staff** role (staff can cancel any reservation)
+
+Otherwise, a **403 Forbidden** error is returned.
+
+### Side Effects
+
+- **Email Notification**: Cancellation notice sent automatically
+- **Calendar Sync**: Event removed from Google Calendar
+- **Database**: Reservation marked as cancelled
+
+Source: `internal/handler/handler_reservations.go:110`

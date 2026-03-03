@@ -1,0 +1,140 @@
+---
+title: "Installation"
+description: "Install and set up the BookMe API server for development or production"
+---
+
+## Prerequisites
+
+Before installing BookMe, ensure you have the following installed:
+
+- **Go 1.22** or higher
+- **PostgreSQL 14+**
+- **Git** for version control
+- **Make** (optional, but recommended)
+
+<Note>
+  BookMe is built with Go 1.22 and uses modern Go features. Earlier versions may not be compatible.
+</Note>
+
+---
+
+## Installation Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the BookMe repository from GitHub:
+
+    ```bash
+    git clone https://github.com/IbnBaqqi/book-me.git
+    cd book-me
+    ```
+  </Step>
+
+  <Step title="Install Go Dependencies">
+    Download all required Go modules:
+
+    ```bash
+    go mod download
+    ```
+
+    Or use the Makefile:
+
+    ```bash
+    make deps
+    ```
+
+    This will also run `go mod tidy` to ensure your dependencies are clean.
+  </Step>
+
+  <Step title="Verify Installation">
+    Verify that all dependencies are installed correctly:
+
+    ```bash
+    go mod verify
+    ```
+
+    You should see:
+    ```
+    all modules verified
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Project Structure
+
+After cloning, you'll have the following structure:
+
+```bash
+book-me/
+├── cmd/
+│   └── server/
+│       └── main.go                 # Application entry point
+├── internal/
+│   ├── api/                        # API server setup
+│   ├── auth/                       # JWT authentication
+│   ├── config/                     # Configuration management
+│   ├── database/                   # SQLC generated code
+│   ├── handler/                    # HTTP handlers
+│   ├── middleware/                 # HTTP middleware
+│   ├── oauth/                      # OAuth2 implementation
+│   ├── service/                    # Business logic
+│   ├── email/                      # Email notifications
+│   └── google/                     # Google Calendar integration
+├── sql/
+│   ├── queries/                    # SQL queries for SQLC
+│   └── schema/                     # Database migrations
+├── docs/                           # Documentation
+├── assets/                         # Static assets
+├── .env.example                    # Environment variables template
+├── Makefile                        # Build automation
+└── README.md
+```
+
+---
+
+## Next Steps
+
+After installation, proceed with:
+
+1. [Environment Configuration](/setup/environment) - Set up your `.env` file
+2. [Database Setup](/setup/database) - Create and migrate your PostgreSQL database
+3. [OAuth Setup](/setup/oauth-setup) - Configure 42 Intra OAuth authentication
+
+---
+
+## Optional Tools
+
+### Air (Hot Reload)
+
+For development with automatic reloading:
+
+```bash
+go install github.com/cosmtrek/air@latest
+```
+
+Then run:
+```bash
+make dev
+```
+
+### Goose (Database Migrations)
+
+For managing database migrations:
+
+```bash
+go install github.com/pressly/goose/v3/cmd/goose@latest
+```
+
+### SQLC (SQL Code Generation)
+
+If you plan to modify SQL queries:
+
+```bash
+go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+```
+
+<Tip>
+  The Makefile provides convenient commands for common tasks. Run `make` to see all available commands.
+</Tip>

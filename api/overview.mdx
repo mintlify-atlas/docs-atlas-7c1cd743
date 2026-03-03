@@ -1,0 +1,149 @@
+---
+title: 'API Overview'
+description: 'Introduction to the BookMe API for meeting room reservations at Hive Helsinki'
+---
+
+The BookMe API is a RESTful backend service for managing meeting room reservations at Hive Helsinki. It provides secure authentication via 42 OAuth, comprehensive reservation management, and integrates with Google Calendar for scheduling.
+
+## Base URL
+
+```
+http://localhost:8080
+```
+
+<Note>
+All API endpoints require HTTPS in production. The base URL will vary depending on your deployment environment.
+</Note>
+
+## API Endpoints
+
+### Authentication
+
+| Method | Endpoint              | Description                 | Auth Required |
+|--------|-----------------------|-----------------------------|---------------|
+| GET    | `/oauth/login`        | Initiate OAuth login        | No            |
+| GET    | `/oauth/callback`     | OAuth callback handler      | No            |
+
+### Reservations
+
+| Method | Endpoint                         | Description                         | Auth Required |
+|--------|----------------------------------|-------------------------------------|---------------|
+| POST   | `/api/v1/reservations`           | Create a new reservation            | Yes           |
+| GET    | `/api/v1/reservations`           | Get unavailable time slots          | Yes           |
+| DELETE | `/api/v1/reservations/{id}`      | Cancel a reservation                | Yes           |
+
+### Health Check
+
+| Method | Endpoint        | Description             | Auth Required |
+|--------|-----------------|-------------------------|---------------|
+| GET    | `/api/v1/health`| Health check endpoint   | No            |
+
+## Health Check
+
+The health endpoint monitors the status of critical services including database, calendar, and email systems.
+
+<CodeGroup>
+```bash Request
+curl http://localhost:8080/api/v1/health
+```
+
+```json Response (Healthy)
+{
+  "status": "healthy",
+  "checks": {
+    "calendar": "healthy",
+    "database": "healthy",
+    "email": "healthy"
+  }
+}
+```
+
+```json Response (Unhealthy)
+{
+  "status": "unhealthy",
+  "checks": {
+    "calendar": "healthy",
+    "database": "unhealthy",
+    "email": "healthy"
+  }
+}
+```
+</CodeGroup>
+
+## Business Rules
+
+### Reservation Constraints
+
+#### Time Validation
+
+- Cannot book past times
+- End time must be after start time
+- Bookings must be within school hours: **6:00 AM - 8:00 PM**
+- Maximum duration:
+  - **Students**: 4 hours
+  - **Staff**: Unlimited
+- Date range queries cannot exceed **60 days**
+
+<Warning>
+Reservations outside school hours (6:00 AM - 8:00 PM) will be rejected with a `400 Bad Request` error.
+</Warning>
+
+#### Overlap Prevention
+
+- The system automatically checks for conflicting reservations
+- Returns **`409 Conflict`** if a time slot is already booked
+
+#### Authorization Rules
+
+- **Students** can only cancel their own reservations
+- **Staff members** can cancel any reservation
+
+<Info>
+Unauthorized cancellation attempts return a `403 Forbidden` error.
+</Info>
+
+### Privacy
+
+Booking details are visible to:
+- The person who made the booking
+- Staff members
+
+<Note>
+Other users only see time slots marked as "booked" without personal details.
+</Note>
+
+## Email Notifications
+
+The system automatically sends email notifications for:
+
+- **Booking Confirmation** – Sent immediately after successful reservation
+- **Cancellation Notice** – Sent when a reservation is cancelled
+
+### Gmail SMTP Configuration
+
+1. Enable **2-Factor Authentication** on your Google account
+2. Generate an **App Password** at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+3. Select **Mail** and your device
+4. Copy the generated 16-character password
+5. Use this password as:
+
+```bash
+SMTP_PASSWORD=your-gmail-app-password
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication Flow" icon="lock" href="/api/authentication-flow">
+    Learn how OAuth authentication works
+  </Card>
+  <Card title="Rate Limiting" icon="shield" href="/api/rate-limiting">
+    Understand API rate limits and quotas
+  </Card>
+  <Card title="Error Handling" icon="exclamation-triangle" href="/api/error-handling">
+    Handle errors and validation issues
+  </Card>
+  <Card title="Endpoints" icon="code" href="/api/endpoints/reservations">
+    Explore all available endpoints
+  </Card>
+</CardGroup>

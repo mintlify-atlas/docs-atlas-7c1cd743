@@ -1,0 +1,260 @@
+---
+title: "Project Structure"
+description: "Understanding the BookMe codebase organization and architecture"
+---
+
+## Overview
+
+BookMe follows a clean, modular architecture with clear separation of concerns. The project uses Go's standard layout conventions with internal packages for business logic and cmd for application entry points.
+
+## Directory Structure
+
+```bash
+book-me/
+├── cmd/                    # Application entry points
+│   └── server/
+│       └── main.go        # Main application entry point
+├── internal/              # Private application code
+│   ├── api/              # API server setup and routing
+│   ├── auth/             # JWT authentication logic
+│   ├── config/           # Configuration management
+│   ├── database/         # Database connection and queries
+│   ├── dto/              # Data transfer objects
+│   ├── email/            # Email service and templates
+│   ├── google/           # Google Calendar integration
+│   ├── handler/          # HTTP request handlers
+│   ├── logger/           # Logging utilities
+│   ├── middleware/       # HTTP middleware
+│   ├── oauth/            # OAuth2 authentication
+│   ├── service/          # Business logic layer
+│   └── validator/        # Input validation
+├── sql/                   # Database schema and queries
+│   ├── queries/          # SQL queries for SQLC
+│   └── schema/           # Database migrations
+├── assets/                # Static assets
+├── docs/                  # Project documentation
+└── Configuration files
+```
+
+## Core Packages
+
+<Steps>
+  <Step title="cmd/server">
+    Application entry point located at `cmd/server/main.go:1`
+    
+    - Initializes configuration from environment
+    - Sets up database connection
+    - Configures API routes and middleware
+    - Manages graceful shutdown with 15-second timeout
+  </Step>
+
+  <Step title="internal/api">
+    HTTP server setup and route configuration
+    
+    - `api.go` - API configuration and service initialization
+    - `routes.go` - Route definitions and middleware chaining
+  </Step>
+
+  <Step title="internal/handler">
+    HTTP request handlers for all endpoints
+    
+    Key files:
+    - `handler.go` - Base handler struct with shared dependencies
+    - `handler_health.go` - Health check endpoint
+    - `handler_oauth.go` - OAuth2 login and callback
+    - `handler_reservations.go` - Reservation CRUD operations
+    - `parser.go` - Request parsing utilities
+    - `response.go` - Response formatting helpers
+  </Step>
+
+  <Step title="internal/auth">
+    JWT-based authentication system
+    
+    - Token generation and verification
+    - Bearer token extraction
+    - User context management
+    - 1-hour access token TTL
+  </Step>
+
+  <Step title="internal/middleware">
+    HTTP middleware components
+    
+    - `auth.go` - Authentication middleware
+    - `ratelimit.go` - Rate limiting protection
+  </Step>
+
+  <Step title="internal/database">
+    Database layer with type-safe queries
+    
+    - `connection.go` - PostgreSQL connection pool
+    - `db.go` - Database interface
+    - `models.go` - Data models
+    - `*.sql.go` - SQLC-generated query code
+  </Step>
+
+  <Step title="internal/service">
+    Business logic layer
+    
+    - Reservation validation and creation
+    - Conflict detection
+    - Business rule enforcement
+  </Step>
+
+  <Step title="internal/oauth">
+    42 Intra OAuth2 integration
+    
+    - `provider42.go` - 42 OAuth provider implementation
+    - `service.go` - OAuth service orchestration
+    - `errors.go` - OAuth-specific errors
+  </Step>
+</Steps>
+
+## Database Layer
+
+### Schema Files (`sql/schema/`)
+
+Migration files applied in order:
+
+1. `001_users.sql` - User accounts and authentication
+2. `002_rooms.sql` - Meeting room definitions
+3. `003_reservations.sql` - Booking records
+4. `004_populate_rooms.sql` - Initial room data
+
+### Query Files (`sql/queries/`)
+
+SQL queries for SQLC code generation:
+
+- `users.sql` - User CRUD operations
+- `rooms.sql` - Room queries
+- `reservations.sql` - Reservation management
+
+<Note>
+SQLC generates type-safe Go code from SQL queries. After modifying `.sql` files in `sql/queries/`, run `make sqlc` to regenerate the database layer code in `internal/database/`.
+</Note>
+
+## Code Generation
+
+### SQLC Configuration
+
+The `sqlc.yaml` file configures code generation:
+
+```yaml
+version: "2"
+sql:
+  - schema: "sql/schema"
+    queries: "sql/queries"
+    engine: "postgresql"
+    gen:
+      go:
+        out: "internal/database"
+```
+
+Generated files:
+- `internal/database/db.go`
+- `internal/database/models.go`
+- `internal/database/users.sql.go`
+- `internal/database/rooms.sql.go`
+- `internal/database/reservations.sql.go`
+
+## Configuration Management
+
+### Environment Variables
+
+Configuration is loaded from `.env` via `internal/config/config.go`:
+
+<CodeGroup>
+```bash Server
+PORT=8080
+SERVER_READ_TIMEOUT=15s
+SERVER_WRITE_TIMEOUT=15s
+SERVER_IDLE_TIMEOUT=60s
+LOG_LEVEL=info
+```
+
+```bash Database
+DB_URL=postgres://user:pass@localhost:5432/bookme
+```
+
+```bash Authentication
+JWT_SECRET=your-secret-here
+SESSION_SECRET=another-secret
+CLIENT_ID=42-client-id
+SECRET=42-client-secret
+```
+
+```bash Email
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=app-password
+```
+</CodeGroup>
+
+## Design Patterns
+
+### Handler Pattern
+
+All HTTP handlers share a common structure:
+
+```go
+type APIHandler struct {
+    db          *database.Queries
+    authService *auth.Service
+    // ... other services
+}
+
+func (h *APIHandler) HandleSomething(w http.ResponseWriter, r *http.Request) {
+    // Request handling logic
+}
+```
+
+### Middleware Chain
+
+Requests flow through middleware layers:
+
+1. Rate limiting (global)
+2. Authentication (extracts JWT)
+3. Authorization (requires valid user)
+4. Handler (business logic)
+
+### Error Handling
+
+Custom error types per package:
+- `internal/auth/auth.go` - `ErrExpiredToken`, `ErrNoAuthHeaderIncluded`
+- `internal/service/errors.go` - Business logic errors
+- `internal/oauth/errors.go` - OAuth-specific errors
+- `internal/validator/errors.go` - Validation errors
+
+## Testing Structure
+
+Test files are located alongside their implementation:
+
+- `internal/auth/auth_test.go` - JWT token tests
+- `internal/middleware/auth_test.go` - Auth middleware tests
+- `internal/middleware/ratelimit_test.go` - Rate limiting tests
+- `internal/handler/parser_test.go` - Request parsing tests
+- `internal/validator/validator_test.go` - Input validation tests
+- `internal/email/email_service_test.go` - Email service tests
+- `internal/google/calendar_test.go` - Google Calendar tests
+
+<Tip>
+Run `make test` to execute all tests with verbose output. Use `make test-coverage` to generate an HTML coverage report.
+</Tip>
+
+## Key Files Reference
+
+| File | Purpose | Line Reference |
+|------|---------|----------------|
+| `cmd/server/main.go` | Application entry point | Main at :22 |
+| `internal/api/routes.go` | Route definitions | All HTTP routes |
+| `internal/handler/handler_reservations.go` | Reservation endpoints | CRUD handlers |
+| `internal/auth/auth.go` | JWT authentication | Token generation |
+| `internal/database/connection.go` | DB connection pool | PostgreSQL setup |
+| `sqlc.yaml` | SQLC configuration | Code generation |
+| `.golangci.yml` | Linter configuration | Code quality rules |
+
+## Next Steps
+
+- [Building the Project](/development/building) - Learn how to build and run BookMe
+- [Testing Guide](/development/testing) - Understand the testing approach
+- [Contributing](/development/contributing) - Start contributing to the project

@@ -1,0 +1,326 @@
+---
+title: 'Rate Limiting'
+description: 'API rate limits, quotas, and best practices for handling rate limit errors'
+---
+
+The BookMe API implements per-IP rate limiting to prevent abuse and ensure fair usage across all clients. Different endpoint groups have different rate limits based on their sensitivity and typical usage patterns.
+
+## Rate Limit Configuration
+
+The API uses token bucket algorithm for rate limiting, implemented with `golang.org/x/time/rate`.
+
+### OAuth Endpoints
+
+Authentication endpoints have stricter rate limits to prevent brute force attacks:
+
+<Info>
+**Rate Limit**: 5 requests per 12 seconds per IP address
+
+**Burst Size**: 5 requests
+</Info>
+
+**Applies to:**
+- `GET /oauth/login`
+- `GET /oauth/callback`
+
+**Configuration:**
+```go
+oauthLimiter := middleware.NewRateLimiter(
+    rate.Every(12*time.Second), // 1 request every 12 seconds
+    5,                           // burst of 5 requests
+    false                        // don't trust proxy headers
+)
+```
+
+Source: `internal/api/routes.go:28`
+
+<Warning>
+This allows a maximum of 5 login attempts in quick succession, then enforces 12-second intervals between subsequent attempts.
+</Warning>
+
+### API Endpoints
+
+General API endpoints have more generous rate limits for normal application usage:
+
+<Info>
+**Rate Limit**: 30 requests per 2 seconds per IP address
+
+**Burst Size**: 30 requests
+</Info>
+
+**Applies to:**
+- `POST /api/v1/reservations` - Create reservation
+- `GET /api/v1/reservations` - Get reservations
+- `DELETE /api/v1/reservations/{id}` - Cancel reservation
+
+**Configuration:**
+```go
+apiLimiter := middleware.NewRateLimiter(
+    rate.Every(2*time.Second), // 1 request every 2 seconds
+    30,                        // burst of 30 requests
+    false                      // don't trust proxy headers
+)
+```
+
+Source: `internal/api/routes.go:29`
+
+<Note>
+This configuration allows clients to make up to 30 requests immediately, then sustains a rate of 1 request every 2 seconds (0.5 requests/second).
+</Note>
+
+### Health Check Endpoint
+
+<Info>
+The health check endpoint (`GET /api/v1/health`) is **not rate limited** to allow unrestricted monitoring.
+</Info>
+
+Source: `internal/api/routes.go:35`
+
+## How Rate Limiting Works
+
+### Token Bucket Algorithm
+
+The API uses the token bucket algorithm:
+
+1. Each IP address gets a virtual "bucket" with a maximum capacity (burst size)
+2. Tokens are added to the bucket at a constant rate
+3. Each request consumes one token
+4. If no tokens are available, the request is rejected with `429 Too Many Requests`
+
+### IP Address Detection
+
+The rate limiter identifies clients by their IP address:
+
+```go
+// Priority order:
+1. r.RemoteAddr (direct connection IP)
+2. X-Forwarded-For header (if trustProxy=true)
+3. X-Real-IP header (if trustProxy=true)
+```
+
+Source: `internal/middleware/ratelimit.go:93-111`
+
+<Warning>
+**Current Configuration**: `trustProxy=false`
+
+The API does **not** trust proxy headers by default. All rate limiting is based on `RemoteAddr`.
+
+If deploying behind a reverse proxy (nginx, Cloudflare, etc.), consider enabling `trustProxy` and properly configuring proxy headers.
+</Warning>
+
+### Visitor Cleanup
+
+To prevent memory leaks, the rate limiter automatically cleans up stale visitor records:
+
+- **Cleanup Interval**: Every 3 minutes
+- **Stale Threshold**: Visitors inactive for > 3 minutes are removed
+
+Source: `internal/middleware/ratelimit.go:40-62`
+
+## Rate Limit Responses
+
+### When Rate Limit is Exceeded
+
+When a client exceeds the rate limit, the API returns:
+
+**Status Code**: `429 Too Many Requests`
+
+**Headers**:
+```
+Retry-After: 6
+```
+
+**Response Body**:
+```
+Rate limit exceeded. Please try again later.
+```
+
+Source: `internal/middleware/ratelimit.go:81-85`
+
+<CodeGroup>
+```bash Example Request
+curl -i http://localhost:8080/oauth/login
+```
+
+```http Rate Limited Response
+HTTP/1.1 429 Too Many Requests
+Retry-After: 6
+Content-Type: text/plain; charset=utf-8
+X-Content-Type-Options: nosniff
+
+Rate limit exceeded. Please try again later.
+```
+</CodeGroup>
+
+### Retry-After Header
+
+The `Retry-After` header is always set to **6 seconds**, providing a consistent hint for when to retry the request.
+
+<Info>
+Clients should respect the `Retry-After` header and implement exponential backoff for better reliability.
+</Info>
+
+## Best Practices
+
+### Handling Rate Limits
+
+<Steps>
+  <Step title="Check Response Status">
+    Always check for `429 Too Many Requests` status code in your error handling
+    
+    ```javascript
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      // Wait and retry
+    }
+    ```
+  </Step>
+  
+  <Step title="Respect Retry-After">
+    Use the `Retry-After` header value to determine when to retry
+    
+    ```javascript
+    const retryAfterSeconds = parseInt(
+      response.headers.get('Retry-After')
+    );
+    await new Promise(resolve => 
+      setTimeout(resolve, retryAfterSeconds * 1000)
+    );
+    ```
+  </Step>
+  
+  <Step title="Implement Exponential Backoff">
+    For multiple consecutive rate limit errors, increase wait time exponentially
+    
+    ```javascript
+    let backoff = 1;
+    while (retries < maxRetries) {
+      const response = await fetch(url, options);
+      if (response.status === 429) {
+        await sleep(backoff * 1000);
+        backoff *= 2; // Exponential increase
+        retries++;
+      } else {
+        break;
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Batch Requests">
+    When possible, batch multiple operations to stay within rate limits
+  </Step>
+</Steps>
+
+### Rate Limit Monitoring
+
+When rate limits are exceeded, the server logs warnings:
+
+```
+WARN rate limit exceeded ip=192.168.1.1 method=GET path=/oauth/login
+```
+
+Source: `internal/middleware/ratelimit.go:82`
+
+<Note>
+Monitor these logs to identify clients that frequently hit rate limits and may need optimization.
+</Note>
+
+### Example: Client Implementation
+
+<CodeGroup>
+```javascript JavaScript with Retry
+async function makeRequest(url, options, maxRetries = 3) {
+  let retries = 0;
+  let backoff = 1;
+  
+  while (retries <= maxRetries) {
+    const response = await fetch(url, options);
+    
+    if (response.status === 429) {
+      const retryAfter = parseInt(
+        response.headers.get('Retry-After') || '6'
+      );
+      
+      if (retries === maxRetries) {
+        throw new Error('Max retries exceeded');
+      }
+      
+      console.log(`Rate limited. Retrying after ${retryAfter * backoff}s`);
+      await new Promise(resolve => 
+        setTimeout(resolve, retryAfter * backoff * 1000)
+      );
+      
+      backoff *= 2;
+      retries++;
+      continue;
+    }
+    
+    return response;
+  }
+}
+
+// Usage
+const response = await makeRequest(
+  'http://localhost:8080/api/v1/reservations',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(reservationData)
+  }
+);
+```
+
+```python Python with Retry
+import time
+import requests
+
+def make_request(url, headers, data=None, max_retries=3):
+    retries = 0
+    backoff = 1
+    
+    while retries <= max_retries:
+        response = requests.post(url, headers=headers, json=data)
+        
+        if response.status_code == 429:
+            retry_after = int(response.headers.get('Retry-After', 6))
+            
+            if retries == max_retries:
+                raise Exception('Max retries exceeded')
+            
+            wait_time = retry_after * backoff
+            print(f'Rate limited. Retrying after {wait_time}s')
+            time.sleep(wait_time)
+            
+            backoff *= 2
+            retries += 1
+            continue
+        
+        return response
+
+# Usage
+response = make_request(
+    'http://localhost:8080/api/v1/reservations',
+    headers={
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    },
+    data=reservation_data
+)
+```
+</CodeGroup>
+
+## Rate Limit Summary
+
+| Endpoint Group | Rate | Burst | Interval | Requests/Minute |
+|----------------|------|-------|----------|------------------|
+| OAuth endpoints | 5/12s | 5 | 12 seconds | ~25 |
+| API endpoints | 30/2s | 30 | 2 seconds | ~30 |
+| Health check | Unlimited | N/A | N/A | Unlimited |
+
+<Info>
+All rate limits are applied **per IP address** and are independent of authentication status.
+</Info>

@@ -1,0 +1,281 @@
+---
+title: 'Authentication Flow'
+description: 'OAuth 2.0 authentication flow using 42 Intra with JWT token management'
+---
+
+BookMe uses OAuth 2.0 authentication via 42 Intra, followed by JWT (JSON Web Token) based session management. This ensures secure access while maintaining stateless API operations.
+
+## Authentication Overview
+
+The authentication process involves two main phases:
+1. **OAuth 2.0 Flow** - Initial authentication via 42 Intra
+2. **JWT Token Management** - Ongoing API authorization
+
+## OAuth 2.0 Flow
+
+### Step-by-Step Process
+
+<Steps>
+  <Step title="Initiate Login">
+    User clicks "Login" and is redirected to `/oauth/login`
+    
+    ```bash
+    GET /oauth/login
+    ```
+    
+    The server generates a cryptographically secure state token (32 bytes, hex-encoded) and stores it in a session cookie for CSRF protection.
+  </Step>
+  
+  <Step title="OAuth Provider Redirect">
+    System redirects to 42 Intra OAuth provider with the authorization URL
+    
+    ```
+    https://api.intra.42.fr/oauth/authorize?client_id=...&state=...
+    ```
+  </Step>
+  
+  <Step title="User Authorization">
+    User authorizes the application on the 42 Intra platform
+  </Step>
+  
+  <Step title="OAuth Callback">
+    OAuth provider redirects back to `/oauth/callback` with authorization code
+    
+    ```bash
+    GET /oauth/callback?code=AUTH_CODE&state=STATE_TOKEN
+    ```
+  </Step>
+  
+  <Step title="State Validation">
+    Server validates the state token to prevent CSRF attacks
+    
+    Source: `internal/oauth/service.go:97-114`
+    
+    <Warning>
+    If state validation fails, the request is rejected with `403 Forbidden` error.
+    </Warning>
+  </Step>
+  
+  <Step title="Token Exchange">
+    System exchanges authorization code for access token with 42 Intra API
+    
+    Source: `internal/oauth/provider42.go:63-70`
+  </Step>
+  
+  <Step title="Fetch User Info">
+    System fetches user information from 42 Intra with retry logic:
+    - **Max Retries**: 3
+    - **Retry Wait**: 1-5 seconds with exponential backoff
+    - **Timeout**: 15 seconds
+    
+    Source: `internal/oauth/provider42.go:73-111`
+    
+    <Info>
+    The retry mechanism ensures reliability when communicating with the 42 Intra API.
+    </Info>
+  </Step>
+  
+  <Step title="Campus Validation">
+    Verify user belongs to Hive Helsinki (Campus ID: 13)
+    
+    ```go
+    // Only users with campus_id=13 as primary campus are allowed
+    isHive := false
+    for _, camp := range user42.Campus {
+        if camp.ID == 13 && camp.Primary {
+            isHive = true
+            break
+        }
+    }
+    ```
+    
+    Source: `internal/oauth/service.go:75-84`
+    
+    <Warning>
+    Users from other campuses receive a `403 Forbidden` error: "access denied: only helsinki campus student allowed"
+    </Warning>
+  </Step>
+  
+  <Step title="Create/Update User">
+    System finds existing user or creates a new database record
+    
+    User roles are determined by 42 Intra staff status:
+    - `staff? = true` → **Staff** role
+    - `staff? = false` → **Student** role
+    
+    Source: `internal/oauth/provider42.go:128-160`
+  </Step>
+  
+  <Step title="Generate JWT Token">
+    Server generates a JWT access token containing user information
+    
+    **Token Configuration:**
+    - **Algorithm**: HS256 (HMAC with SHA-256)
+    - **Expiration**: 1 hour
+    - **Token Type**: access
+    
+    Source: `internal/auth/auth.go:76-96`
+  </Step>
+  
+  <Step title="Return Token">
+    JWT token is returned to the client and redirected to the configured URL
+  </Step>
+</Steps>
+
+## JWT Token Structure
+
+The JWT token contains the following claims:
+
+```json
+{
+  "name": "John Doe",
+  "role": "student",
+  "sub": "42",
+  "iss": "access",
+  "iat": 1234567890,
+  "exp": 1234571490
+}
+```
+
+### Custom Claims
+
+| Claim | Description | Source |
+|-------|-------------|--------|
+| `name` | User's login name from 42 Intra | `user.Name` |
+| `role` | User role: `student` or `staff` | `user.Role` |
+| `sub` | User ID (subject) | `user.ID` |
+| `iss` | Token issuer (always "access") | `tokenTypeAccess` |
+| `iat` | Issued at timestamp | Current time |
+| `exp` | Expiration timestamp | Current time + 1 hour |
+
+Source: `internal/auth/auth.go:20-25`, `internal/auth/auth.go:79-88`
+
+## Using JWT Tokens
+
+### Making Authenticated Requests
+
+Include the JWT token in the `Authorization` header with the `Bearer` scheme:
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8080/api/v1/reservations \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "roomId": 1,
+    "startTime": "2025-01-28T14:00:00Z",
+    "endTime": "2025-01-28T16:00:00Z"
+  }'
+```
+
+```javascript JavaScript
+fetch('http://localhost:8080/api/v1/reservations', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    roomId: 1,
+    startTime: '2025-01-28T14:00:00Z',
+    endTime: '2025-01-28T16:00:00Z'
+  })
+});
+```
+
+```python Python
+import requests
+
+headers = {
+    'Authorization': f'Bearer {token}',
+    'Content-Type': 'application/json'
+}
+
+data = {
+    'roomId': 1,
+    'startTime': '2025-01-28T14:00:00Z',
+    'endTime': '2025-01-28T16:00:00Z'
+}
+
+response = requests.post(
+    'http://localhost:8080/api/v1/reservations',
+    headers=headers,
+    json=data
+)
+```
+</CodeGroup>
+
+### Token Validation
+
+The server validates JWT tokens on protected endpoints:
+
+1. **Extract Bearer Token** from Authorization header
+2. **Verify Signature** using HS256 algorithm
+3. **Check Expiration** - Reject if expired
+4. **Validate Claims** - Ensure token type is "access"
+5. **Extract User Info** - Load user ID, name, and role into request context
+
+Source: `internal/auth/auth.go:99-125`, `internal/auth/auth.go:128-141`
+
+<Warning>
+Tokens expire after **1 hour**. Clients must handle token expiration and re-authenticate when necessary.
+</Warning>
+
+## Error Responses
+
+### OAuth Errors
+
+| Error | Status Code | Description |
+|-------|-------------|-------------|
+| `invalid or missing oauth code` | 400 | Authorization code is missing or invalid |
+| `oauth state mismatch` | 403 | CSRF protection - state token mismatch |
+| `access denied: only helsinki campus student allowed` | 403 | User is not from Hive Helsinki campus |
+| `oauth request timeout` | 504 | Request to 42 Intra API timed out |
+| `oauth token exchange failed` | 500 | Failed to exchange code for token |
+| `failed to fetch user info from oauth provider` | 500 | Failed to retrieve user data from 42 |
+| `failed to find or create user` | 500 | Database error during user creation |
+
+Source: `internal/oauth/errors.go:40-81`
+
+### JWT Authentication Errors
+
+| Error | Status Code | Description |
+|-------|-------------|-------------|
+| `no auth header included in request` | 401 | Missing Authorization header |
+| `bearer token is empty` | 401 | Empty token after "Bearer " prefix |
+| `bearer token is incorrect` | 401 | Missing "Bearer " prefix |
+| `invalid token` | 401 | Token signature validation failed |
+| `expired token` | 401 | Token has expired (> 1 hour old) |
+
+Source: `internal/auth/auth.go:49-55`
+
+<Info>
+All authentication errors return JSON responses with an `error` field containing the error message.
+</Info>
+
+## Security Features
+
+### CSRF Protection
+
+- Cryptographically secure random state tokens (32 bytes)
+- State stored in HTTP-only session cookies
+- State validation on OAuth callback
+
+Source: `internal/oauth/service.go:32-50`, `internal/oauth/service.go:122-126`
+
+### Token Security
+
+- JWT tokens signed with HS256 algorithm
+- Secret key stored in environment variables
+- Token expiration enforced server-side
+- HMAC signature prevents token tampering
+
+### Session Management
+
+- Session cookies for OAuth state
+- Cleanup of stale session data
+- Session secrets from environment configuration
+
+<Note>
+Ensure `JWT_SECRET` environment variable is set to a strong, random value in production.
+</Note>

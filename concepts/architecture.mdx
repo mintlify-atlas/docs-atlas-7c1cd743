@@ -1,0 +1,238 @@
+---
+title: Architecture
+description: Understanding the BookMe system architecture and design patterns
+---
+
+BookMe is a Go-based HTTP API server for meeting room reservations at Hive Helsinki. The system follows a clean, layered architecture with clear separation of concerns.
+
+## System Overview
+
+The application is built on a multi-layer architecture pattern:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     HTTP Layer                          │
+│  (Routes, Handlers, Middleware)                         │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────────────┐
+│                  Service Layer                          │
+│  (Business Logic, Validation)                           │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────────────┐
+│                  Data Layer                             │
+│  (Database, External APIs)                              │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Core Components
+
+### Entry Point
+
+The server starts from `cmd/server/main.go:21` which:
+
+1. Loads configuration from environment variables
+2. Initializes structured logging
+3. Establishes database connection
+4. Wires up all services and dependencies
+5. Starts the HTTP server with graceful shutdown support
+
+<Accordion title="Server Initialization Code Flow">
+```go
+// Configuration loading
+cfg, err := config.Load()
+
+// Database connection
+db, err := database.Connect(ctx, &cfg.App)
+
+// Service initialization
+apiCfg, err := api.New(cfg, db)
+
+// Route setup
+mux := api.SetupRoutes(apiCfg)
+
+// HTTP server with timeouts
+server := &http.Server{
+    Addr:         ":" + cfg.Server.Port,
+    Handler:      mux,
+    ReadTimeout:  cfg.Server.ReadTimeout,
+    WriteTimeout: cfg.Server.WriteTimeout,
+    IdleTimeout:  cfg.Server.IdleTimeout,
+}
+```
+</Accordion>
+
+### API Layer
+
+The API layer (`internal/api/api.go:18`) serves as the dependency injection container, holding references to all services:
+
+- **Database**: PostgreSQL connection via `sqlc` generated queries
+- **OAuth Service**: 42 Intranet authentication provider
+- **Auth Service**: JWT token generation and validation
+- **Email Service**: SMTP-based email notifications
+- **Calendar Service**: Google Calendar integration
+- **Reservation Service**: Core business logic
+
+<Info>
+All services are initialized once during startup and shared across all handlers. This singleton pattern ensures efficient resource usage and consistent state management.
+</Info>
+
+### Handler Layer
+
+Handlers (`internal/handler/handler.go:14`) receive HTTP requests and:
+
+1. Parse and validate request data
+2. Extract authenticated user from context
+3. Call appropriate service methods
+4. Format and return JSON responses
+
+The handler layer is intentionally thin—business logic lives in the service layer.
+
+### Service Layer
+
+The service layer contains all business logic. Key services include:
+
+**ReservationService** (`internal/service/reservation.go:26`)
+- Validates business rules (duration limits, overlapping bookings)
+- Manages database transactions
+- Coordinates asynchronous operations (email, calendar)
+
+**OAuth Service** (`internal/oauth/service.go:17`)
+- Orchestrates OAuth 2.0 flow with 42 Intranet
+- Validates campus affiliation (must be Hive Helsinki)
+- Creates or finds users in the database
+
+**Auth Service** (`internal/auth/auth.go:28`)
+- Issues JWT access tokens with 1-hour expiration
+- Verifies token signatures and claims
+- Manages user context propagation
+
+### Data Layer
+
+The data layer handles all external integrations:
+
+**Database** (`internal/database/db.go`)
+- PostgreSQL via `database/sql` and `sqlc`
+- Type-safe query generation
+- Transaction support with isolation levels
+- Models: User, Room, Reservation
+
+**Email Service** (`internal/email/email_service.go:21`)
+- SMTP client with TLS
+- HTML template rendering
+- Retry logic with exponential backoff (3 attempts)
+
+**Calendar Service** (`internal/google/calender.go:27`)
+- Google Calendar API v3
+- Service account authentication
+- Automatic retry on transient failures
+
+## Request Flow
+
+A typical reservation creation follows this path:
+
+1. **HTTP Request** → `POST /api/v1/reservations`
+2. **Rate Limiting** → Middleware checks per-IP limits
+3. **Authentication** → Middleware extracts and validates JWT
+4. **Authorization** → `RequireAuth` middleware ensures user is authenticated
+5. **Handler** → Parses request body, validates fields
+6. **Service** → Checks business rules, creates transaction
+7. **Database** → Checks for conflicts, inserts reservation
+8. **Async Tasks** → Calendar event creation and email confirmation (non-blocking)
+9. **Response** → Returns created reservation as JSON
+
+<Warning>
+Calendar and email operations run asynchronously in goroutines. Failures in these operations do not rollback the reservation—they are logged for monitoring.
+</Warning>
+
+## Middleware Stack
+
+Requests pass through middleware in this order:
+
+```go
+// From internal/api/routes.go
+RateLimiter → Authenticate → RequireAuth → Handler
+```
+
+**Rate Limiter** (`internal/middleware/ratelimit.go:16`)
+- Per-IP token bucket algorithm
+- OAuth endpoints: 5 requests per 12 seconds
+- API endpoints: 30 requests per 2 seconds
+- Automatic cleanup of stale visitor records
+
+**Authenticate** (`internal/middleware/auth.go:13`)
+- Extracts Bearer token from `Authorization` header
+- Verifies JWT signature and expiration
+- Adds user to request context
+- Allows request to continue even without valid token (for public endpoints)
+
+**RequireAuth** (`internal/middleware/auth.go:52`)
+- Enforces authentication requirement
+- Returns `401 Unauthorized` if user not in context
+- Used only on protected endpoints
+
+## Configuration Management
+
+Configuration is loaded from environment variables (`internal/config/config.go:14`):
+
+- **Server**: Port, timeouts (read/write/idle)
+- **Database**: PostgreSQL connection string
+- **OAuth**: 42 API credentials and endpoints
+- **JWT**: Secret key for token signing
+- **Email**: SMTP server credentials
+- **Google**: Service account credentials and calendar ID
+
+<Tip>
+The system loads `.env` files in development but falls back to system environment variables in production. All sensitive values must be set via environment variables.
+</Tip>
+
+## Graceful Shutdown
+
+The server implements graceful shutdown (`cmd/server/main.go:76`):
+
+1. Listens for `SIGINT` or `SIGTERM` signals
+2. Stops accepting new connections
+3. Waits up to 15 seconds for active requests to complete
+4. Closes database connections
+5. Exits cleanly
+
+This ensures:
+- No requests are dropped mid-processing
+- Database connections are properly released
+- Clean deployment with zero downtime
+
+## Error Handling
+
+Errors are handled consistently across layers:
+
+- **Service Layer**: Returns domain-specific errors with status codes
+- **Handler Layer**: Translates errors to appropriate HTTP responses
+- **Logging**: All errors are logged with structured context using `slog`
+
+## Database Schema
+
+The system uses three main tables:
+
+**users**
+- `id`: Primary key
+- `email`: Unique, from 42 Intranet
+- `name`: Display name
+- `role`: `STUDENT` or `STAFF`
+
+**rooms**
+- `id`: Primary key
+- `name`: Room identifier (e.g., "Kalevala")
+
+**reservations**
+- `id`: Primary key
+- `user_id`: Foreign key to users
+- `room_id`: Foreign key to rooms
+- `start_time`: Reservation start (timestamp)
+- `end_time`: Reservation end (timestamp)
+- `status`: `RESERVED` (future: `CANCELLED`, `COMPLETED`)
+- `gcal_event_id`: Google Calendar event ID (nullable)
+
+<Note>
+The database uses `sqlc` for type-safe query generation. All SQL queries are defined in `.sql` files and compiled to Go code at build time.
+</Note>

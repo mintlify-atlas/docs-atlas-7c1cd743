@@ -1,0 +1,453 @@
+---
+title: "Google Calendar Integration"
+description: "Set up Google Calendar sync for staff reservations"
+---
+
+## Overview
+
+Google Calendar integration is an **optional feature** that allows staff members to automatically sync their room reservations to Google Calendar. This creates calendar events that include the room name, reservation time, and staff member's username.
+
+<Info>
+  This feature is **only available for staff users**. Student reservations are not synced to Google Calendar.
+</Info>
+
+---
+
+## When to Use Google Calendar
+
+Google Calendar integration is useful when:
+
+- Staff members want room bookings to appear in their shared calendar
+- You need centralized visibility of all room reservations
+- You want calendar invites sent to participants
+- Integration with other calendar systems is needed
+
+<Note>
+  If you don't need calendar integration, you can skip this setup. The application will work fine without it.
+</Note>
+
+---
+
+## Prerequisites
+
+- Google Account with access to Google Cloud Console
+- Google Calendar where events will be created
+- Basic understanding of Google Cloud Platform
+
+---
+
+## Setup Process
+
+### 1. Create Google Cloud Project
+
+<Steps>
+  <Step title="Access Google Cloud Console">
+    Navigate to [Google Cloud Console](https://console.cloud.google.com/)
+  </Step>
+
+  <Step title="Create New Project">
+    1. Click **Select a project** → **New Project**
+    2. Enter project name: `BookMe Calendar Integration`
+    3. Click **Create**
+  </Step>
+
+  <Step title="Enable Google Calendar API">
+    1. In the project dashboard, go to **APIs & Services** → **Library**
+    2. Search for "Google Calendar API"
+    3. Click **Google Calendar API**
+    4. Click **Enable**
+  </Step>
+</Steps>
+
+---
+
+### 2. Create Service Account
+
+Service accounts allow server-to-server authentication without user interaction.
+
+<Steps>
+  <Step title="Navigate to Service Accounts">
+    Go to **IAM & Admin** → **Service Accounts**
+  </Step>
+
+  <Step title="Create Service Account">
+    1. Click **Create Service Account**
+    2. **Service account name:** `book-me-calendar`
+    3. **Service account ID:** Auto-generated (e.g., `book-me-calendar@project-id.iam.gserviceaccount.com`)
+    4. **Description:** "Service account for BookMe calendar integration"
+    5. Click **Create and Continue**
+  </Step>
+
+  <Step title="Grant Permissions">
+    1. **Select a role:** Choose **Editor** (or create a custom role with Calendar permissions)
+    2. Click **Continue**
+    3. Click **Done**
+  </Step>
+</Steps>
+
+---
+
+### 3. Generate Service Account Key
+
+<Steps>
+  <Step title="Access Service Account">
+    In the Service Accounts list, click on the `book-me-calendar` service account.
+  </Step>
+
+  <Step title="Create Key">
+    1. Click the **Keys** tab
+    2. Click **Add Key** → **Create new key**
+    3. Select **JSON** format
+    4. Click **Create**
+  </Step>
+
+  <Step title="Save Credentials File">
+    The JSON file will download automatically. Save it to your BookMe project:
+
+    ```bash
+    mv ~/Downloads/project-id-xxxxx.json ~/workspace/source/assets/book-me-service-account.json
+    ```
+
+    <Warning>
+      This file contains sensitive credentials. Never commit it to version control. Add to `.gitignore`:
+      ```
+      assets/book-me-service-account.json
+      ```
+    </Warning>
+  </Step>
+</Steps>
+
+---
+
+### 4. Configure Google Calendar
+
+<Steps>
+  <Step title="Create or Select Calendar">
+    1. Open [Google Calendar](https://calendar.google.com)
+    2. Create a new calendar or use an existing one
+    3. Recommended: Create a dedicated "Hive Meeting Rooms" calendar
+  </Step>
+
+  <Step title="Share Calendar with Service Account">
+    1. Click on the calendar → **Settings and sharing**
+    2. Scroll to **Share with specific people**
+    3. Click **Add people**
+    4. Enter the service account email:
+       ```
+       book-me-calendar@your-project-id.iam.gserviceaccount.com
+       ```
+       (Found in the JSON credentials file under `client_email`)
+    5. Set permission to **Make changes to events**
+    6. Click **Send**
+  </Step>
+
+  <Step title="Get Calendar ID">
+    1. In calendar settings, scroll to **Integrate calendar**
+    2. Copy the **Calendar ID** (looks like `abcd1234@group.calendar.google.com`)
+    3. Save this for environment configuration
+  </Step>
+</Steps>
+
+---
+
+### 5. Configure Environment Variables
+
+Add Google Calendar configuration to your `.env` file:
+
+```bash
+# Google Calendar Configuration
+GOOGLE_CREDENTIALS_FILE=assets/book-me-service-account.json
+GOOGLE_CALENDAR_SCOPE=https://www.googleapis.com/auth/calendar
+GOOGLE_CALENDAR_ID=your-calendar-id@group.calendar.google.com
+```
+
+### Variable Descriptions
+
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CREDENTIALS_FILE` | Path to service account JSON credentials |
+| `GOOGLE_CALENDAR_SCOPE` | Google Calendar API scope (fixed value) |
+| `GOOGLE_CALENDAR_ID` | Calendar ID where events will be created |
+
+<Note>
+  The calendar scope `https://www.googleapis.com/auth/calendar` grants full read/write access to calendars. This is required to create and delete events.
+</Note>
+
+---
+
+## How It Works
+
+When a **staff member** creates a reservation, BookMe:
+
+1. Creates the reservation in the database
+2. Creates a Google Calendar event with:
+   - **Title:** `[username] Room Name meeting room`
+   - **Description:** `Created via BookMe`
+   - **Time:** Reservation start and end times
+   - **Timezone:** `Europe/Helsinki`
+3. Stores the Google Calendar event ID in the database
+4. Sends confirmation email to the user
+
+When a reservation is cancelled:
+
+1. BookMe deletes the database record
+2. Deletes the corresponding Google Calendar event
+
+<Info>
+  Implementation details can be found in `internal/google/calender.go:74` (CreateGoogleEvent) and `internal/google/calender.go:121` (DeleteGoogleEvent).
+</Info>
+
+---
+
+## Event Format
+
+Google Calendar events created by BookMe:
+
+```json
+{
+  "summary": "[jdoe] Saturn meeting room",
+  "description": "Created via BookMe",
+  "start": {
+    "dateTime": "2024-03-15T14:00:00+02:00",
+    "timeZone": "Europe/Helsinki"
+  },
+  "end": {
+    "dateTime": "2024-03-15T15:00:00+02:00",
+    "timeZone": "Europe/Helsinki"
+  }
+}
+```
+
+---
+
+## Testing Integration
+
+<Steps>
+  <Step title="Verify Configuration">
+    Ensure all environment variables are set:
+    ```bash
+    cat .env | grep GOOGLE
+    ```
+  </Step>
+
+  <Step title="Start the Server">
+    ```bash
+    make run
+    ```
+
+    Check logs for successful calendar service initialization:
+    ```
+    INFO google calendar service initialized
+    ```
+  </Step>
+
+  <Step title="Create Staff Reservation">
+    As a staff user, create a reservation via the API:
+
+    ```bash
+    curl -X POST http://localhost:8080/api/v1/reservations \
+      -H "Authorization: Bearer STAFF_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "room_id": "room-uuid",
+        "start_time": "2024-03-15T14:00:00Z",
+        "end_time": "2024-03-15T15:00:00Z"
+      }'
+    ```
+  </Step>
+
+  <Step title="Verify in Google Calendar">
+    1. Open your Google Calendar
+    2. Check the shared calendar
+    3. Verify the event appears with correct details
+  </Step>
+
+  <Step title="Test Cancellation">
+    Cancel the reservation:
+
+    ```bash
+    curl -X DELETE http://localhost:8080/api/v1/reservations/RESERVATION_ID \
+      -H "Authorization: Bearer STAFF_JWT_TOKEN"
+    ```
+
+    Verify the event is removed from Google Calendar.
+  </Step>
+</Steps>
+
+---
+
+## Health Check
+
+BookMe includes a health check for the Google Calendar service. The health endpoint verifies:
+
+- Service account authentication
+- Calendar API accessibility
+- Permissions to access the configured calendar
+
+Access the health check at:
+```
+GET /api/v1/health
+```
+
+<Note>
+  See `internal/google/calender.go:112` for the HealthCheck implementation.
+</Note>
+
+---
+
+## Troubleshooting
+
+### Credentials File Not Found
+
+```
+failed to read credentials file
+```
+
+**Solution:** Verify the path in `GOOGLE_CREDENTIALS_FILE` is correct:
+```bash
+ls -la assets/book-me-service-account.json
+```
+
+### Invalid Credentials
+
+```
+failed to create JWT config
+```
+
+**Solution:** 
+- Ensure the JSON file is valid
+- Verify it's a service account key (not OAuth client credentials)
+- Re-download the key from Google Cloud Console
+
+### Calendar Not Found
+
+```
+calendar API unreachable: 404 Not Found
+```
+
+**Solution:**
+- Verify `GOOGLE_CALENDAR_ID` is correct
+- Ensure calendar is shared with the service account
+- Check service account email has "Make changes to events" permission
+
+### Permission Denied
+
+```
+failed to create event: 403 Forbidden
+```
+
+**Solution:**
+- Verify service account has **Editor** role in Google Cloud
+- Check calendar sharing permissions
+- Ensure `GOOGLE_CALENDAR_SCOPE` includes calendar write access
+
+### Events Not Appearing
+
+**Check:**
+1. **Correct Calendar:** Viewing the right calendar in Google Calendar
+2. **Timezone:** Events use `Europe/Helsinki` timezone
+3. **Date Range:** Events may be in the future
+4. **Logs:** Check application logs for errors
+
+### Retry Failures
+
+The calendar service includes retry logic:
+- **Max retries:** 3
+- **Wait time:** 4-10 seconds
+
+If all retries fail, check:
+- Network connectivity
+- Google API status
+- Rate limits
+
+<Info>
+  Retry configuration is in `internal/google/calender.go:51-53`.
+</Info>
+
+---
+
+## Security Considerations
+
+<Warning>
+  **Protect your service account credentials**
+  - Never commit `book-me-service-account.json` to version control
+  - Restrict file permissions: `chmod 600 assets/book-me-service-account.json`
+  - Use environment variables for the file path in production
+  - Rotate service account keys periodically
+</Warning>
+
+### Best Practices
+
+1. **Principle of Least Privilege:** Grant minimal required permissions
+2. **Separate Calendars:** Use dedicated calendar for BookMe events
+3. **Monitor Usage:** Track Google Calendar API usage in Cloud Console
+4. **Key Rotation:** Rotate service account keys every 90 days
+5. **Audit Logs:** Enable Google Cloud audit logging
+
+---
+
+## Rate Limits
+
+Google Calendar API has the following limits:
+
+- **Queries per day:** 1,000,000 (should be more than sufficient)
+- **Queries per 100 seconds per user:** 500
+
+BookMe's retry logic helps handle temporary rate limit errors gracefully.
+
+---
+
+## Production Deployment
+
+For production environments:
+
+<Steps>
+  <Step title="Use Environment Variables">
+    Instead of file paths, use environment variables with base64-encoded credentials:
+
+    ```bash
+    # Encode credentials
+    export GOOGLE_CREDENTIALS=$(cat assets/book-me-service-account.json | base64)
+    ```
+
+    Modify your code to decode from environment variable if needed.
+  </Step>
+
+  <Step title="Secure Storage">
+    Store credentials in:
+    - AWS Secrets Manager
+    - Google Secret Manager
+    - Kubernetes Secrets
+    - Vault
+  </Step>
+
+  <Step title="Monitor Events">
+    Set up monitoring for:
+    - Event creation success/failure rates
+    - API quota usage
+    - Error patterns
+  </Step>
+</Steps>
+
+---
+
+## Disabling Google Calendar
+
+If you want to disable Google Calendar integration:
+
+1. Remove or comment out the Google Calendar environment variables in `.env`
+2. The application will detect missing configuration and skip calendar operations
+3. Staff reservations will still work, but won't sync to Google Calendar
+
+<Note>
+  The application gracefully handles missing Google Calendar configuration. It will log a warning but continue operating normally.
+</Note>
+
+---
+
+## Next Steps
+
+After setting up Google Calendar:
+
+1. [Test the complete booking flow](/api/endpoints/reservations)
+2. [Learn about the authentication flow](/api/authentication-flow)

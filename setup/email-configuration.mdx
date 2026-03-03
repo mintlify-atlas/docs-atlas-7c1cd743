@@ -1,0 +1,427 @@
+---
+title: "Email Configuration"
+description: "Configure SMTP email notifications for booking confirmations"
+---
+
+## Overview
+
+BookMe sends email notifications to users when they create reservations. The email service uses SMTP with TLS encryption and supports multiple providers.
+
+<Info>
+  Email notifications are sent for all successful reservations, confirming the room, date, and time details.
+</Info>
+
+---
+
+## Email Template
+
+BookMe uses HTML email templates located at `internal/email/templates/confirmation_email_v2.html`. The confirmation email includes:
+
+- Room name
+- Reservation date and time
+- Start and end times
+- Hive Helsinki branding
+
+---
+
+## SMTP Configuration
+
+Add SMTP credentials to your `.env` file:
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=your-smtp-password
+FROM_EMAIL=noreply@bookme.com
+FROM_NAME=BookMe
+SMTP_USE_TLS=true
+```
+
+### Configuration Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SMTP_HOST` | **Yes** | - | SMTP server hostname |
+| `SMTP_PORT` | No | `587` | SMTP server port (587 for TLS, 465 for SSL) |
+| `SMTP_USERNAME` | **Yes** | - | SMTP authentication username |
+| `SMTP_PASSWORD` | **Yes** | - | SMTP authentication password |
+| `FROM_EMAIL` | **Yes** | - | Email address used as sender |
+| `FROM_NAME` | No | `BookMe` | Display name for the sender |
+| `SMTP_USE_TLS` | No | `true` | Enable STARTTLS encryption |
+
+---
+
+## Provider-Specific Setup
+
+### Gmail
+
+Gmail requires an **App Password** when using SMTP with 2-factor authentication.
+
+<Steps>
+  <Step title="Enable 2-Factor Authentication">
+    Go to [Google Account Security](https://myaccount.google.com/security) and enable 2-Step Verification.
+  </Step>
+
+  <Step title="Generate App Password">
+    1. Visit [App Passwords](https://myaccount.google.com/apppasswords)
+    2. Select **Mail** as the app
+    3. Select **Other** as the device and enter "BookMe"
+    4. Click **Generate**
+    5. Copy the 16-character password (remove spaces)
+  </Step>
+
+  <Step title="Configure Environment">
+    ```bash
+    SMTP_HOST=smtp.gmail.com
+    SMTP_PORT=587
+    SMTP_USERNAME=your-email@gmail.com
+    SMTP_PASSWORD=abcd-efgh-ijkl-mnop  # Your generated app password
+    FROM_EMAIL=noreply@bookme.com
+    FROM_NAME=BookMe - Hive Helsinki
+    SMTP_USE_TLS=true
+    ```
+
+    <Note>
+      You can use your Gmail address as `FROM_EMAIL`, or use a custom address like `noreply@bookme.com` (Gmail will still send from your account).
+    </Note>
+  </Step>
+</Steps>
+
+---
+
+### SendGrid
+
+SendGrid is a popular transactional email service with a free tier.
+
+<Steps>
+  <Step title="Create SendGrid Account">
+    Sign up at [SendGrid](https://sendgrid.com) and verify your account.
+  </Step>
+
+  <Step title="Create API Key">
+    1. Go to **Settings** → **API Keys**
+    2. Click **Create API Key**
+    3. Name it "BookMe SMTP"
+    4. Select **Full Access** or **Mail Send** permission
+    5. Copy the API key
+  </Step>
+
+  <Step title="Configure Environment">
+    ```bash
+    SMTP_HOST=smtp.sendgrid.net
+    SMTP_PORT=587
+    SMTP_USERNAME=apikey
+    SMTP_PASSWORD=SG.your-sendgrid-api-key-here
+    FROM_EMAIL=noreply@bookme.com
+    FROM_NAME=BookMe
+    SMTP_USE_TLS=true
+    ```
+
+    <Warning>
+      The username is literally the string `apikey`, not your SendGrid username.
+    </Warning>
+  </Step>
+
+  <Step title="Verify Sender Email">
+    In SendGrid dashboard:
+    1. Go to **Settings** → **Sender Authentication**
+    2. Verify your sender email or domain
+    3. Use verified email as `FROM_EMAIL`
+  </Step>
+</Steps>
+
+---
+
+### Mailgun
+
+Mailgun offers powerful email APIs with SMTP support.
+
+<Steps>
+  <Step title="Create Mailgun Account">
+    Sign up at [Mailgun](https://mailgun.com) and verify your account.
+  </Step>
+
+  <Step title="Get SMTP Credentials">
+    1. Go to **Sending** → **Domain Settings**
+    2. Select your domain (use sandbox domain for testing)
+    3. Find **SMTP Credentials** section
+    4. Create a new SMTP user or use the default
+  </Step>
+
+  <Step title="Configure Environment">
+    ```bash
+    SMTP_HOST=smtp.mailgun.org
+    SMTP_PORT=587
+    SMTP_USERNAME=postmaster@sandbox123.mailgun.org
+    SMTP_PASSWORD=your-mailgun-password
+    FROM_EMAIL=noreply@bookme.com
+    FROM_NAME=BookMe
+    SMTP_USE_TLS=true
+    ```
+  </Step>
+</Steps>
+
+---
+
+### AWS SES (Amazon Simple Email Service)
+
+AWS SES is cost-effective for high-volume email sending.
+
+<Steps>
+  <Step title="Set Up SES">
+    1. Log into AWS Console
+    2. Navigate to **SES** service
+    3. Verify your email address or domain
+    4. Request production access (if out of sandbox)
+  </Step>
+
+  <Step title="Create SMTP Credentials">
+    1. Go to **SMTP Settings**
+    2. Click **Create SMTP Credentials**
+    3. Download the credentials CSV
+  </Step>
+
+  <Step title="Configure Environment">
+    ```bash
+    # Example: us-east-1 region
+    SMTP_HOST=email-smtp.us-east-1.amazonaws.com
+    SMTP_PORT=587
+    SMTP_USERNAME=your-ses-smtp-username
+    SMTP_PASSWORD=your-ses-smtp-password
+    FROM_EMAIL=verified@yourdomain.com
+    FROM_NAME=BookMe
+    SMTP_USE_TLS=true
+    ```
+
+    <Note>
+      Replace `us-east-1` with your AWS region.
+    </Note>
+  </Step>
+</Steps>
+
+---
+
+### Office 365 / Outlook
+
+For organizations using Microsoft 365.
+
+```bash
+SMTP_HOST=smtp.office365.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@company.com
+SMTP_PASSWORD=your-password
+FROM_EMAIL=noreply@company.com
+FROM_NAME=BookMe
+SMTP_USE_TLS=true
+```
+
+<Warning>
+  Microsoft may block SMTP access if you have 2FA enabled. You may need to create an app-specific password.
+</Warning>
+
+---
+
+## Email Service Features
+
+The BookMe email service (implemented in `internal/email/email_service.go`) includes:
+
+### Retry Logic
+
+Automatic retry with exponential backoff:
+- **Attempts:** 3 retries
+- **Initial delay:** 4 seconds
+- **Maximum delay:** 10 seconds
+
+```go
+// From internal/email/email_service.go:111
+retry.New(
+    retry.Attempts(3),
+    retry.Delay(4*time.Second),
+    retry.MaxDelay(10*time.Second),
+)
+```
+
+### TLS Encryption
+
+All emails are sent over encrypted connections using STARTTLS.
+
+### HTML Templates
+
+Professional HTML email templates with embedded CSS for consistent rendering across email clients.
+
+---
+
+## Testing Email Configuration
+
+### Test SMTP Connection
+
+Create a simple test:
+
+<Steps>
+  <Step title="Start the Server">
+    ```bash
+    make run
+    ```
+
+    Check logs for email service initialization:
+    ```
+    INFO email service initialized
+    ```
+  </Step>
+
+  <Step title="Create a Test Reservation">
+    Use the API to create a reservation (this will trigger an email):
+
+    ```bash
+    curl -X POST http://localhost:8080/api/v1/reservations \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "room_id": "room-uuid",
+        "start_time": "2024-03-15T10:00:00Z",
+        "end_time": "2024-03-15T11:00:00Z"
+      }'
+    ```
+  </Step>
+
+  <Step title="Check Email">
+    Verify the confirmation email was received at the authenticated user's email address.
+  </Step>
+</Steps>
+
+### Manual SMTP Test
+
+Test SMTP connectivity using `telnet` or `openssl`:
+
+```bash
+# Test connection to SMTP server
+openssl s_client -connect smtp.gmail.com:587 -starttls smtp
+```
+
+Successful connection should show:
+```
+220 smtp.gmail.com ESMTP
+```
+
+---
+
+## Troubleshooting
+
+### Authentication Failed
+
+```
+failed to create mail client: authentication failed
+```
+
+**Solutions:**
+- Verify `SMTP_USERNAME` and `SMTP_PASSWORD` are correct
+- For Gmail: ensure you're using an App Password, not your regular password
+- Check if 2FA is enabled and requires app-specific password
+
+### Connection Timeout
+
+```
+failed to connect to SMTP server: timeout
+```
+
+**Solutions:**
+- Check `SMTP_HOST` is correct
+- Verify `SMTP_PORT` (usually 587 for TLS, 465 for SSL)
+- Ensure firewall allows outbound connections on the SMTP port
+- Try alternative port (587, 465, or 25)
+
+### TLS Handshake Failed
+
+```
+tls: handshake failed
+```
+
+**Solutions:**
+- Set `SMTP_USE_TLS=true`
+- Ensure using port 587 for STARTTLS
+- Try port 465 for implicit SSL
+
+### Email Not Received
+
+**Check:**
+1. **Spam folder**: Emails may be filtered as spam
+2. **Sender verification**: Some providers require verified sender addresses
+3. **Logs**: Check application logs for sending errors
+4. **Rate limits**: You may be hitting provider rate limits
+
+### Template Rendering Failed
+
+```
+failed to render email template
+```
+
+**Solution:** 
+- Verify email templates exist in `internal/email/templates/`
+- Check template syntax is valid HTML
+- Ensure template data fields match `BookingData` structure
+
+---
+
+## Production Recommendations
+
+<Warning>
+  Gmail is suitable for development and low-volume use. For production, use a dedicated transactional email service like SendGrid, Mailgun, or AWS SES.
+</Warning>
+
+### Best Practices
+
+1. **Use Dedicated Service**: SendGrid, Mailgun, or AWS SES for reliability
+2. **Monitor Send Rates**: Track email delivery and bounce rates
+3. **Implement SPF/DKIM**: Set up email authentication records
+4. **Handle Bounces**: Monitor bounced emails and invalid addresses
+5. **Rate Limiting**: Respect provider rate limits
+6. **Logging**: Log all email sending attempts for debugging
+
+### Rate Limits
+
+| Provider | Free Tier Limit | Notes |
+|----------|----------------|-------|
+| Gmail | ~500/day | For personal accounts |
+| SendGrid | 100/day | Free tier |
+| Mailgun | 5,000/month | First 3 months |
+| AWS SES | 62,000/month | If sending from EC2 |
+
+---
+
+## Email Template Customization
+
+To customize the email template:
+
+<Steps>
+  <Step title="Locate Template">
+    Email templates are at:
+    ```
+    internal/email/templates/confirmation_email_v2.html
+    ```
+  </Step>
+
+  <Step title="Edit HTML">
+    Modify the HTML template. Available variables:
+    - `{{.RoomName}}` - Meeting room name
+    - `{{.StartTime}}` - Reservation start time
+    - `{{.EndTime}}` - Reservation end time
+  </Step>
+
+  <Step title="Test Changes">
+    Restart the server and create a test reservation to see your changes.
+  </Step>
+</Steps>
+
+<Note>
+  Templates are embedded into the binary at build time using Go's `embed` package (see `internal/email/email_service.go:17`).
+</Note>
+
+---
+
+## Next Steps
+
+After configuring email:
+
+1. [Configure Google Calendar integration](/setup/google-calendar) (optional)
+2. [Test the complete application flow](/api/endpoints/reservations)

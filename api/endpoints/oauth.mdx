@@ -1,0 +1,222 @@
+---
+title: "OAuth Authentication"
+description: "User authentication via 42 Intra OAuth provider"
+---
+
+## Authentication Flow
+
+The BookMe API uses OAuth 2.0 with the 42 Intra provider for user authentication. The flow consists of two endpoints:
+
+1. **Login** - Initiates the OAuth flow
+2. **Callback** - Handles the OAuth provider response and issues JWT tokens
+
+### Flow Diagram
+
+1. User clicks "Login" → Redirected to `/oauth/login`
+2. System redirects to OAuth provider (42 Intra)
+3. User authorizes the application
+4. OAuth provider redirects to `/oauth/callback`
+5. System exchanges code for access token
+6. System fetches user info and creates/updates user in database
+7. System generates JWT token
+8. JWT token returned to client
+9. Client includes JWT in `Authorization: Bearer <token>` header for protected routes
+
+---
+
+## GET /oauth/login
+
+Initiates the OAuth 2.0 authentication flow by redirecting the user to the 42 Intra authorization page.
+
+### Authentication
+
+No authentication required.
+
+### Rate Limiting
+
+- **Rate**: 5 requests per 12 seconds per IP
+- **Status Code on Limit**: 429 Too Many Requests
+
+### Response
+
+**302 Found** - Redirects to 42 Intra OAuth authorization URL with:
+- OAuth state parameter (stored in session for CSRF protection)
+- Client ID
+- Redirect URI
+- Requested scopes
+
+### Error Responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+**500 Internal Server Error** - Failed to initiate OAuth session
+
+```json
+{
+  "error": "failed to save session"
+}
+```
+
+### Examples
+
+<CodeGroup>
+
+```bash Initiate Login
+curl -L http://localhost:8080/oauth/login
+```
+
+```http Response
+HTTP/1.1 302 Found
+Location: https://api.intra.42.fr/oauth/authorize?client_id=...&redirect_uri=...&response_type=code&state=...
+```
+
+</CodeGroup>
+
+Source: `internal/handler/handler_oauth.go:12`
+
+---
+
+## GET /oauth/callback
+
+Handles the OAuth provider callback, validates the state parameter, exchanges the authorization code for an access token, fetches user information, and issues a JWT token.
+
+### Authentication
+
+No authentication required (OAuth code in query parameters).
+
+### Rate Limiting
+
+- **Rate**: 5 requests per 12 seconds per IP
+- **Status Code on Limit**: 429 Too Many Requests
+
+### Query Parameters
+
+<ParamField query="code" type="string" required>
+  Authorization code from the OAuth provider
+</ParamField>
+
+<ParamField query="state" type="string" required>
+  CSRF protection state parameter (must match the value stored in session)
+</ParamField>
+
+### Response
+
+**302 Found** - Redirects to frontend with JWT token and user information:
+
+```
+{FRONTEND_URL}?token={JWT_TOKEN}&intra={USERNAME}&role={USER_ROLE}
+```
+
+### Error Responses
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+**400 Bad Request** - Invalid or missing OAuth code
+
+```json
+{
+  "error": "invalid or missing oauth code"
+}
+```
+
+**403 Forbidden** - OAuth state mismatch (CSRF protection)
+
+```json
+{
+  "error": "oauth state mismatch"
+}
+```
+
+**403 Forbidden** - Invalid or missing state parameter
+
+```json
+{
+  "error": "invalid or missing state"
+}
+```
+
+**403 Forbidden** - User not from Helsinki campus
+
+```json
+{
+  "error": "access denied: only helsinki campus student allowed"
+}
+```
+
+**500 Internal Server Error** - OAuth token exchange failed
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+**500 Internal Server Error** - Failed to fetch user info from provider
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+**500 Internal Server Error** - Failed to create/update user in database
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+**500 Internal Server Error** - Failed to generate JWT token
+
+```json
+{
+  "error": "Failed to generate token"
+}
+```
+
+**504 Gateway Timeout** - OAuth request timeout
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+### Examples
+
+<CodeGroup>
+
+```bash Callback (automatically handled by OAuth flow)
+curl "http://localhost:8080/oauth/callback?code=AUTH_CODE&state=STATE_VALUE"
+```
+
+```http Successful Response
+HTTP/1.1 302 Found
+Location: http://frontend.example.com?token=eyJhbGciOiJIUzI1NiIs...&intra=jdoe&role=student
+```
+
+</CodeGroup>
+
+### Security Features
+
+- **CSRF Protection**: State parameter validation
+- **Campus Restriction**: Only Helsinki campus users allowed
+- **Session Management**: OAuth state stored in secure session
+- **JWT Issuance**: Secure token generation for API access
+
+Source: `internal/handler/handler_oauth.go:26`
+
+### Using the JWT Token
+
+Once you receive the JWT token from the callback, include it in the `Authorization` header for all protected API requests:
+
+```bash
+Authorization: Bearer YOUR_JWT_TOKEN
+```
+
+See [Reservations](/api/endpoints/reservations) for examples of authenticated requests.

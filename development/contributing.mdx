@@ -1,0 +1,579 @@
+---
+title: "Contributing Guide"
+description: "How to contribute to BookMe - guidelines, workflow, and best practices"
+---
+
+## Welcome Contributors!
+
+Thank you for your interest in contributing to BookMe! This guide will help you get started with contributions, whether you're fixing bugs, adding features, or improving documentation.
+
+## Getting Started
+
+<Steps>
+  <Step title="Fork and Clone">
+    Fork the repository and clone your fork:
+    
+    ```bash
+    git clone https://github.com/YOUR-USERNAME/book-me.git
+    cd book-me
+    ```
+  </Step>
+
+  <Step title="Set Up Development Environment">
+    Install dependencies and set up your environment:
+    
+    ```bash
+    # Install Go dependencies
+    make deps
+    
+    # Copy environment template
+    cp .env.example .env
+    
+    # Set up database
+    createdb bookme
+    goose -dir sql/schema postgres "your-db-url" up
+    ```
+    
+    See [Building Guide](/development/building) for detailed setup.
+  </Step>
+
+  <Step title="Create a Branch">
+    Create a feature branch for your changes:
+    
+    ```bash
+    git checkout -b feature/your-feature-name
+    # or
+    git checkout -b fix/bug-description
+    ```
+  </Step>
+
+  <Step title="Make Your Changes">
+    Implement your feature or fix following the [Code Standards](#code-standards) below.
+  </Step>
+
+  <Step title="Test Your Changes">
+    Ensure all tests pass:
+    
+    ```bash
+    make test
+    make test-coverage
+    ```
+  </Step>
+
+  <Step title="Submit a Pull Request">
+    Push your branch and create a PR with a clear description.
+  </Step>
+</Steps>
+
+## Code Standards
+
+### Go Style Guidelines
+
+BookMe follows standard Go conventions with additional requirements:
+
+#### Formatting
+
+```bash
+# Format all code before committing
+make fmt
+
+# Run linter to catch issues
+golangci-lint run
+```
+
+<Note>
+The project uses `golangci-lint` with strict rules defined in `.golangci.yml`. All PRs must pass linting checks.
+</Note>
+
+#### Enabled Linters
+
+From `.golangci.yml:8-21`:
+
+- **errcheck** - Check for unchecked errors
+- **govet** - Suspicious constructs
+- **staticcheck** - Advanced static analysis
+- **gosec** - Security issues
+- **revive** - Style and correctness
+- **bodyclose** - HTTP response body leaks
+- **errorlint** - Proper error handling with `errors.Is`/`errors.As`
+- **exhaustive** - Missing switch cases
+
+### Code Organization
+
+#### Package Structure
+
+Follow the existing structure:
+
+```bash
+internal/
+  ├── handler/      # HTTP handlers
+  ├── service/      # Business logic
+  ├── database/     # Database queries (SQLC generated)
+  ├── middleware/   # HTTP middleware
+  └── validator/    # Input validation
+```
+
+<Tip>
+Place new code in the appropriate package. If unsure, check [Project Structure](/development/project-structure) or ask in your PR.
+</Tip>
+
+#### File Naming
+
+- Implementation: `snake_case.go` (e.g., `handler_reservations.go`)
+- Tests: `*_test.go` (e.g., `auth_test.go`)
+- Interfaces: `interface.go` or descriptive name (e.g., `db.go`)
+
+### Writing Go Code
+
+#### Error Handling
+
+Always handle errors explicitly:
+
+```go
+// ✅ Good
+user, err := db.GetUserByID(ctx, id)
+if err != nil {
+    return fmt.Errorf("failed to get user: %w", err)
+}
+
+// ❌ Bad
+user, _ := db.GetUserByID(ctx, id)
+```
+
+Use `errors.Is` for error comparison:
+
+```go
+if errors.Is(err, auth.ErrExpiredToken) {
+    // Handle expired token
+}
+```
+
+#### Context Usage
+
+Always pass context as the first parameter:
+
+```go
+func GetUser(ctx context.Context, id int64) (*User, error) {
+    // Implementation
+}
+```
+
+#### HTTP Handlers
+
+Follow the handler pattern from `internal/handler/handler.go`:
+
+```go
+func (h *APIHandler) HandleEndpoint(w http.ResponseWriter, r *http.Request) {
+    // 1. Parse request
+    var req RequestDTO
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondWithError(w, http.StatusBadRequest, "Invalid request")
+        return
+    }
+    
+    // 2. Validate input
+    if err := h.validator.Validate(req); err != nil {
+        respondWithError(w, http.StatusBadRequest, err.Error())
+        return
+    }
+    
+    // 3. Business logic
+    result, err := h.service.DoSomething(r.Context(), req)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Operation failed")
+        return
+    }
+    
+    // 4. Respond
+    respondWithJSON(w, http.StatusOK, result)
+}
+```
+
+### Database Changes
+
+BookMe uses SQLC for type-safe database queries.
+
+<Steps>
+  <Step title="Create Migration">
+    Add a new migration file in `sql/schema/`:
+    
+    ```sql sql/schema/005_add_new_table.sql
+    -- +goose Up
+    CREATE TABLE new_table (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    
+    -- +goose Down
+    DROP TABLE new_table;
+    ```
+  </Step>
+
+  <Step title="Add SQL Queries">
+    Add queries in the appropriate file in `sql/queries/`:
+    
+    ```sql sql/queries/new_table.sql
+    -- name: CreateRecord :one
+    INSERT INTO new_table (name)
+    VALUES ($1)
+    RETURNING *;
+    
+    -- name: GetRecordByID :one
+    SELECT * FROM new_table WHERE id = $1;
+    ```
+  </Step>
+
+  <Step title="Generate Code">
+    Run SQLC to generate Go code:
+    
+    ```bash
+    make sqlc
+    ```
+    
+    This creates type-safe functions in `internal/database/`.
+  </Step>
+
+  <Step title="Commit Generated Code">
+    Commit both the SQL files and generated Go code:
+    
+    ```bash
+    git add sql/ internal/database/
+    git commit -m "Add new_table with SQLC queries"
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Never edit SQLC-generated files (in `internal/database/`) directly. All changes must be made in SQL files and regenerated.
+</Warning>
+
+## Testing Requirements
+
+### Writing Tests
+
+All new code must include tests. Follow patterns from existing tests:
+
+```go
+func TestNewFeature(t *testing.T) {
+    tests := []struct {
+        name    string
+        input   Input
+        want    Output
+        wantErr bool
+    }{
+        {
+            name:    "valid input",
+            input:   Input{Value: "test"},
+            want:    Output{Result: "TEST"},
+            wantErr: false,
+        },
+        {
+            name:    "invalid input",
+            input:   Input{Value: ""},
+            wantErr: true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got, err := NewFeature(tt.input)
+            
+            if (err != nil) != tt.wantErr {
+                t.Errorf("NewFeature() error = %v, wantErr %v", err, tt.wantErr)
+                return
+            }
+            
+            if !reflect.DeepEqual(got, tt.want) {
+                t.Errorf("NewFeature() = %v, want %v", got, tt.want)
+            }
+        })
+    }
+}
+```
+
+### Test Coverage
+
+Maintain high test coverage:
+
+```bash
+# Run tests with coverage
+make test-coverage
+
+# Aim for:
+# - Critical packages (auth, middleware): 85%+
+# - Business logic (service, handler): 80%+
+# - Utilities (validator, parser): 80%+
+```
+
+### Test Checklist
+
+- [ ] Unit tests for new functions
+- [ ] Table-driven tests for multiple scenarios
+- [ ] Edge case testing (empty inputs, nil values, etc.)
+- [ ] Error path testing
+- [ ] HTTP handler tests using `httptest`
+- [ ] All tests pass: `make test`
+
+See [Testing Guide](/development/testing) for detailed examples.
+
+## Pull Request Process
+
+### PR Title Format
+
+Use conventional commit format:
+
+```
+feat: add reservation cancellation notifications
+fix: prevent duplicate bookings in same time slot
+refactor: improve error handling in auth middleware
+docs: update API documentation for reservations
+test: add tests for email service
+```
+
+Prefixes:
+- `feat:` - New feature
+- `fix:` - Bug fix
+- `refactor:` - Code refactoring
+- `docs:` - Documentation
+- `test:` - Tests
+- `chore:` - Maintenance
+
+### PR Description Template
+
+```markdown
+## Description
+Brief description of what this PR does.
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation update
+
+## Testing
+Describe the tests you ran and how to reproduce:
+
+- [ ] Unit tests pass (`make test`)
+- [ ] Coverage is maintained/improved
+- [ ] Linting passes (`golangci-lint run`)
+- [ ] Manual testing performed
+
+## Checklist
+- [ ] Code follows project style guidelines
+- [ ] Self-review completed
+- [ ] Comments added for complex code
+- [ ] Documentation updated
+- [ ] No new warnings introduced
+- [ ] Tests added/updated
+```
+
+### Review Process
+
+<Steps>
+  <Step title="Automated Checks">
+    CI runs automatically:
+    - Tests
+    - Linting
+    - Build verification
+  </Step>
+
+  <Step title="Code Review">
+    Maintainers review:
+    - Code quality
+    - Test coverage
+    - Documentation
+    - Design decisions
+  </Step>
+
+  <Step title="Address Feedback">
+    Make requested changes:
+    ```bash
+    git add .
+    git commit -m "Address review feedback"
+    git push
+    ```
+  </Step>
+
+  <Step title="Merge">
+    Once approved, maintainers will merge your PR.
+  </Step>
+</Steps>
+
+## Development Workflow
+
+### Daily Development
+
+```bash
+# Start development server with hot reload
+make dev
+
+# In another terminal, run tests on save
+go test -v ./internal/package-youre-working-on
+
+# Format and lint before committing
+make fmt
+golangci-lint run
+```
+
+### Pre-Commit Checklist
+
+Before every commit:
+
+- [ ] `make fmt` - Code is formatted
+- [ ] `make test` - All tests pass
+- [ ] `golangci-lint run` - No linting errors
+- [ ] `make build` - Binary builds successfully
+- [ ] Manual testing of changed functionality
+
+### Git Workflow
+
+```bash
+# Keep your fork updated
+git remote add upstream https://github.com/IbnBaqqi/book-me.git
+git fetch upstream
+git checkout main
+git merge upstream/main
+
+# Create feature branch from updated main
+git checkout -b feature/my-feature
+
+# Make changes and commit
+git add .
+git commit -m "feat: add new feature"
+
+# Push to your fork
+git push origin feature/my-feature
+```
+
+## Common Contribution Types
+
+### Adding a New API Endpoint
+
+<Steps>
+  <Step title="Define Handler">
+    Add to `internal/handler/`:
+    
+    ```go
+    func (h *APIHandler) HandleNewEndpoint(w http.ResponseWriter, r *http.Request) {
+        // Implementation
+    }
+    ```
+  </Step>
+
+  <Step title="Add Route">
+    Register in `internal/api/routes.go`:
+    
+    ```go
+    mux.HandleFunc("/api/v1/endpoint", cfg.handler.HandleNewEndpoint)
+    ```
+  </Step>
+
+  <Step title="Add Tests">
+    Create `handler_new_endpoint_test.go`
+  </Step>
+
+  <Step title="Update Documentation">
+    Add endpoint to API reference documentation
+  </Step>
+</Steps>
+
+### Fixing a Bug
+
+<Steps>
+  <Step title="Reproduce the Bug">
+    Write a failing test that demonstrates the bug
+  </Step>
+
+  <Step title="Fix the Issue">
+    Implement the fix in the appropriate package
+  </Step>
+
+  <Step title="Verify Fix">
+    Ensure the test now passes and no regressions occurred
+  </Step>
+
+  <Step title="Document">
+    Add comments explaining the fix if it's not obvious
+  </Step>
+</Steps>
+
+### Improving Documentation
+
+Documentation contributions are highly valued:
+
+- Fix typos or unclear explanations
+- Add examples and code snippets
+- Improve API documentation
+- Add troubleshooting guides
+- Update setup instructions
+
+## Communication
+
+### Getting Help
+
+- **Issues**: Open an issue for bugs or feature requests
+- **Discussions**: Use GitHub Discussions for questions
+- **Pull Requests**: Ask questions in PR comments
+
+### Reporting Bugs
+
+Include in bug reports:
+
+1. **Description**: What happened vs. what you expected
+2. **Steps to Reproduce**: Detailed steps
+3. **Environment**: Go version, OS, database version
+4. **Logs**: Relevant error messages
+5. **Code**: Minimal reproduction code if applicable
+
+### Suggesting Features
+
+For feature requests:
+
+1. **Use Case**: Why is this feature needed?
+2. **Proposed Solution**: How should it work?
+3. **Alternatives**: What alternatives did you consider?
+4. **Additional Context**: Screenshots, mockups, etc.
+
+## Code of Conduct
+
+### Our Standards
+
+- **Be Respectful**: Treat everyone with respect
+- **Be Constructive**: Provide helpful feedback
+- **Be Collaborative**: Work together toward the best solution
+- **Be Patient**: Remember everyone is learning
+
+### Unacceptable Behavior
+
+- Harassment or discrimination
+- Trolling or insulting comments
+- Personal attacks
+- Spam or off-topic comments
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.
+
+See the [LICENSE](https://github.com/IbnBaqqi/book-me/blob/main/LICENSE) file for details.
+
+## Recognition
+
+All contributors are recognized in:
+
+- GitHub contributors list
+- Release notes for significant contributions
+- Community acknowledgments
+
+## Thank You!
+
+Your contributions make BookMe better for everyone. Whether you're fixing a typo or adding a major feature, every contribution is appreciated.
+
+Happy coding! 🚀
+
+## Next Steps
+
+- [Project Structure](/development/project-structure) - Understand the codebase
+- [Building Guide](/development/building) - Set up your environment
+- [Testing Guide](/development/testing) - Write comprehensive tests
+- [API Reference](/api/overview) - Explore the API

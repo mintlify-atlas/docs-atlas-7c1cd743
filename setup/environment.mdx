@@ -1,0 +1,285 @@
+---
+title: "Environment Configuration"
+description: "Configure environment variables for the BookMe API server"
+---
+
+## Overview
+
+BookMe uses environment variables for all configuration. This keeps sensitive data out of source code and allows easy configuration across different environments.
+
+---
+
+## Quick Start
+
+<Steps>
+  <Step title="Copy the Example File">
+    Create your `.env` file from the template:
+
+    ```bash
+    cp .env.example .env
+    ```
+  </Step>
+
+  <Step title="Edit Configuration">
+    Open `.env` in your text editor and fill in the required values:
+
+    ```bash
+    nano .env
+    # or
+    vim .env
+    ```
+  </Step>
+
+  <Step title="Verify Configuration">
+    Before running the server, ensure all required variables are set. The application will exit with an error if any required variable is missing.
+  </Step>
+</Steps>
+
+---
+
+## Environment Variables Reference
+
+### Server Configuration
+
+Controls HTTP server behavior and timeouts.
+
+```bash
+PORT=8080
+SERVER_READ_TIMEOUT=15s
+SERVER_WRITE_TIMEOUT=15s
+SERVER_IDLE_TIMEOUT=60s
+LOG_LEVEL=info
+```
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `8080` | Port number for the HTTP server |
+| `SERVER_READ_TIMEOUT` | No | `15s` | Maximum duration for reading request |
+| `SERVER_WRITE_TIMEOUT` | No | `15s` | Maximum duration for writing response |
+| `SERVER_IDLE_TIMEOUT` | No | `60s` | Maximum duration for idle keep-alive connections |
+| `LOG_LEVEL` | No | `info` | Logging level: `debug`, `info`, `warn`, `error` |
+
+<Note>
+  Timeout values must be valid Go duration strings (e.g., `15s`, `1m`, `500ms`).
+</Note>
+
+---
+
+### Application Configuration
+
+Core application settings.
+
+```bash
+ENV=dev
+DB_URL=postgres://username:password@localhost:5432/bookme?sslmode=disable
+```
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ENV` | No | `dev` | Environment mode: `dev`, `staging`, or `production` |
+| `DB_URL` | **Yes** | - | PostgreSQL connection string |
+
+<Warning>
+  In production, always use `sslmode=require` in your `DB_URL` for secure database connections.
+</Warning>
+
+---
+
+### Authentication & Security
+
+JWT and session secrets for authentication.
+
+```bash
+SESSION_SECRET=your-session-secret-here
+JWT_SECRET=your-jwt-secret-here
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SESSION_SECRET` | **Yes** | Secret key for session encryption |
+| `JWT_SECRET` | **Yes** | Secret key for JWT token signing |
+
+#### Generating Secure Secrets
+
+Use OpenSSL to generate cryptographically secure secrets:
+
+```bash
+openssl rand -base64 32
+```
+
+Run this command twice to generate both secrets:
+
+```bash
+# Generate SESSION_SECRET
+SESSION_SECRET=$(openssl rand -base64 32)
+echo "SESSION_SECRET=$SESSION_SECRET"
+
+# Generate JWT_SECRET
+JWT_SECRET=$(openssl rand -base64 32)
+echo "JWT_SECRET=$JWT_SECRET"
+```
+
+<Warning>
+  Never commit your `.env` file to version control. It contains sensitive credentials.
+</Warning>
+
+---
+
+### OAuth Configuration
+
+42 Intra OAuth settings. See [OAuth Setup](/setup/oauth-setup) for detailed configuration.
+
+```bash
+CLIENT_ID=your-42-client-id
+SECRET=your-42-client-secret
+REDIRECT_URI=http://localhost:8080/oauth/callback
+OAUTH_AUTH_URI=https://api.intra.42.fr/oauth/authorize
+OAUTH_TOKEN_URI=https://api.intra.42.fr/oauth/token
+REDIRECT_TOKEN_URI=http://localhost:3000/auth/callback
+USER_INFO_URL=https://api.intra.42.fr/v2/me
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CLIENT_ID` | **Yes** | 42 OAuth application client ID |
+| `SECRET` | **Yes** | 42 OAuth application client secret |
+| `REDIRECT_URI` | **Yes** | Backend OAuth callback URL |
+| `OAUTH_AUTH_URI` | **Yes** | 42 OAuth authorization endpoint |
+| `OAUTH_TOKEN_URI` | **Yes** | 42 OAuth token endpoint |
+| `REDIRECT_TOKEN_URI` | **Yes** | Frontend redirect URL after authentication |
+| `USER_INFO_URL` | **Yes** | 42 API endpoint for user information |
+
+---
+
+### Email Configuration
+
+SMTP settings for email notifications. See [Email Configuration](/setup/email-configuration) for provider-specific setup.
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=your-smtp-password
+FROM_EMAIL=noreply@bookme.com
+FROM_NAME=BookMe
+SMTP_USE_TLS=true
+```
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SMTP_HOST` | **Yes** | - | SMTP server hostname |
+| `SMTP_PORT` | No | `587` | SMTP server port |
+| `SMTP_USERNAME` | **Yes** | - | SMTP authentication username |
+| `SMTP_PASSWORD` | **Yes** | - | SMTP authentication password |
+| `FROM_EMAIL` | **Yes** | - | Email address shown as sender |
+| `FROM_NAME` | No | `BookMe` | Display name for sender |
+| `SMTP_USE_TLS` | No | `true` | Enable TLS encryption |
+
+---
+
+### Google Calendar Configuration
+
+Optional Google Calendar integration for staff bookings. See [Google Calendar Setup](/setup/google-calendar).
+
+```bash
+GOOGLE_CREDENTIALS_FILE=assets/book-me-service-account.json
+GOOGLE_CALENDAR_SCOPE=https://www.googleapis.com/auth/calendar
+GOOGLE_CALENDAR_ID=your-calendar-id@group.calendar.google.com
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_CREDENTIALS_FILE` | **Yes*** | Path to service account JSON file |
+| `GOOGLE_CALENDAR_SCOPE` | **Yes*** | Google Calendar API scope |
+| `GOOGLE_CALENDAR_ID` | **Yes*** | Google Calendar ID to sync with |
+
+<Info>
+  *Required only if you want to enable Google Calendar integration for staff members.
+</Info>
+
+---
+
+## Configuration Loading
+
+The application loads configuration in the following order:
+
+1. Reads `.env` file from the project root (if it exists)
+2. Loads system environment variables
+3. Validates required variables
+4. Applies default values for optional variables
+
+<Note>
+  System environment variables take precedence over `.env` file values. This is useful for containerized deployments.
+</Note>
+
+---
+
+## Environment-Specific Configuration
+
+### Development
+
+```bash
+ENV=dev
+PORT=8080
+LOG_LEVEL=debug
+DB_URL=postgres://bookme:password@localhost:5432/bookme?sslmode=disable
+```
+
+### Production
+
+```bash
+ENV=production
+PORT=8080
+LOG_LEVEL=warn
+DB_URL=postgres://bookme:secure-password@db.example.com:5432/bookme?sslmode=require
+SMTP_USE_TLS=true
+```
+
+<Warning>
+  Production environments should always use:
+  - Strong, randomly generated secrets
+  - SSL/TLS for database connections (`sslmode=require`)
+  - Secure SMTP with TLS enabled
+  - Appropriate log levels (`info` or `warn`)
+</Warning>
+
+---
+
+## Troubleshooting
+
+### Missing Required Variables
+
+If you see an error like:
+```
+required environment variable not set key=DB_URL
+```
+
+Ensure the variable is set in your `.env` file or system environment.
+
+### Invalid Duration Format
+
+If timeout values are invalid:
+```
+invalid int environment variable, using default
+```
+
+Use valid Go duration strings: `15s`, `1m`, `500ms`, etc.
+
+### File Not Found
+
+If you see:
+```
+no .env file found, relying on system environment variables
+```
+
+This is a warning, not an error. The application will use system environment variables instead.
+
+---
+
+## Next Steps
+
+After configuring your environment:
+
+1. [Set up your database](/setup/database)
+2. [Configure OAuth authentication](/setup/oauth-setup)
+3. [Set up email notifications](/setup/email-configuration)

@@ -1,0 +1,419 @@
+---
+title: "Database Setup"
+description: "Set up and configure PostgreSQL for the BookMe API"
+---
+
+## Overview
+
+BookMe uses PostgreSQL 14+ as its database. This guide covers database creation, configuration, and running migrations.
+
+---
+
+## Prerequisites
+
+<Warning>
+  PostgreSQL 14 or higher is required. Earlier versions may not support all features used by BookMe.
+</Warning>
+
+Ensure PostgreSQL is installed and running:
+
+```bash
+# Check PostgreSQL version
+psql --version
+
+# Check if PostgreSQL is running
+pg_isready
+```
+
+---
+
+## Database Creation
+
+<Steps>
+  <Step title="Create Database">
+    Create the `bookme` database using `createdb`:
+
+    ```bash
+    createdb bookme
+    ```
+
+    Or using `psql`:
+
+    ```bash
+    psql postgres
+    ```
+
+    ```sql
+    CREATE DATABASE bookme;
+    ```
+  </Step>
+
+  <Step title="Create Database User (Optional)">
+    For production, create a dedicated database user:
+
+    ```sql
+    CREATE USER bookme WITH PASSWORD 'your-secure-password';
+    GRANT ALL PRIVILEGES ON DATABASE bookme TO bookme;
+    ```
+  </Step>
+
+  <Step title="Verify Connection">
+    Test the database connection:
+
+    ```bash
+    psql -d bookme -c "SELECT version();"
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Connection String
+
+Configure your database connection in the `.env` file:
+
+<CodeGroup>
+```bash Development
+# Using default postgres user
+DB_URL=postgres://postgres:password@localhost:5432/bookme?sslmode=disable
+```
+
+```bash Production
+# Using dedicated bookme user with SSL
+DB_URL=postgres://bookme:secure-password@db.example.com:5432/bookme?sslmode=require
+```
+
+```bash Docker
+# Connecting to PostgreSQL in Docker
+DB_URL=postgres://bookme:password@postgres:5432/bookme?sslmode=disable
+```
+</CodeGroup>
+
+### Connection String Format
+
+```
+postgres://[username]:[password]@[host]:[port]/[database]?[parameters]
+```
+
+| Component | Description | Example |
+|-----------|-------------|----------|
+| `username` | Database user | `bookme` |
+| `password` | User password | `your-password` |
+| `host` | Database host | `localhost` or `db.example.com` |
+| `port` | PostgreSQL port | `5432` (default) |
+| `database` | Database name | `bookme` |
+| `parameters` | Query parameters | `sslmode=disable` |
+
+<Note>
+  Use `sslmode=disable` for local development only. Production should use `sslmode=require`.
+</Note>
+
+---
+
+## Database Schema
+
+BookMe uses SQL migrations to manage the database schema. The migrations are located in `sql/schema/`.
+
+### Migration Files
+
+```
+sql/schema/
+├── 001_users.sql           # Users table
+├── 002_rooms.sql           # Meeting rooms table
+├── 003_reservations.sql    # Reservations table
+└── 004_populate_rooms.sql  # Initial room data
+```
+
+---
+
+## Running Migrations
+
+### Using Goose (Recommended)
+
+<Steps>
+  <Step title="Install Goose">
+    Install the Goose migration tool:
+
+    ```bash
+    go install github.com/pressly/goose/v3/cmd/goose@latest
+    ```
+  </Step>
+
+  <Step title="Run Migrations">
+    Apply all migrations:
+
+    ```bash
+    goose -dir sql/schema postgres "postgres://username:password@localhost:5432/bookme?sslmode=disable" up
+    ```
+
+    Replace the connection string with your actual database credentials.
+  </Step>
+
+  <Step title="Verify Migrations">
+    Check migration status:
+
+    ```bash
+    goose -dir sql/schema postgres "your-db-url" status
+    ```
+
+    You should see all migrations marked as applied.
+  </Step>
+</Steps>
+
+### Manual Migration
+
+If you prefer to apply migrations manually:
+
+<Steps>
+  <Step title="Connect to Database">
+    ```bash
+    psql -d bookme
+    ```
+  </Step>
+
+  <Step title="Apply Migrations in Order">
+    Run each SQL file in sequence:
+
+    ```sql
+    \i sql/schema/001_users.sql
+    \i sql/schema/002_rooms.sql
+    \i sql/schema/003_reservations.sql
+    \i sql/schema/004_populate_rooms.sql
+    ```
+  </Step>
+
+  <Step title="Verify Tables">
+    List all tables:
+
+    ```sql
+    \dt
+    ```
+
+    You should see:
+    - `users`
+    - `rooms`
+    - `reservations`
+  </Step>
+</Steps>
+
+---
+
+## Database Schema Overview
+
+### Users Table
+
+Stores user information from 42 Intra OAuth:
+
+```sql
+CREATE TABLE users (
+    id UUID PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(100) NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+```
+
+**Roles:**
+- `student` - Can create and cancel own reservations
+- `staff` - Can view all reservations and cancel any booking
+
+### Rooms Table
+
+Stores available meeting rooms:
+
+```sql
+CREATE TABLE rooms (
+    id UUID PRIMARY KEY,
+    name VARCHAR(100) UNIQUE NOT NULL,
+    capacity INT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+```
+
+### Reservations Table
+
+Stores room reservations:
+
+```sql
+CREATE TABLE reservations (
+    id UUID PRIMARY KEY,
+    room_id UUID NOT NULL REFERENCES rooms(id),
+    user_id UUID NOT NULL REFERENCES users(id),
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP NOT NULL,
+    google_event_id VARCHAR(255),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+```
+
+<Info>
+  The `google_event_id` field stores the Google Calendar event ID when a staff member creates a reservation with Calendar sync enabled.
+</Info>
+
+---
+
+## Goose Commands Reference
+
+### Check Migration Status
+
+```bash
+goose -dir sql/schema postgres "your-db-url" status
+```
+
+### Apply All Pending Migrations
+
+```bash
+goose -dir sql/schema postgres "your-db-url" up
+```
+
+### Rollback Last Migration
+
+```bash
+goose -dir sql/schema postgres "your-db-url" down
+```
+
+### Reset Database
+
+```bash
+goose -dir sql/schema postgres "your-db-url" reset
+```
+
+<Warning>
+  `goose reset` will drop all tables. Use with caution, especially in production.
+</Warning>
+
+---
+
+## Verify Database Setup
+
+After running migrations, verify your setup:
+
+<Steps>
+  <Step title="Check Tables">
+    ```sql
+    SELECT table_name FROM information_schema.tables 
+    WHERE table_schema = 'public';
+    ```
+
+    Expected output:
+    - `users`
+    - `rooms`
+    - `reservations`
+    - `goose_db_version` (migration tracking)
+  </Step>
+
+  <Step title="Check Initial Data">
+    Verify that rooms were populated:
+
+    ```sql
+    SELECT id, name, capacity FROM rooms;
+    ```
+  </Step>
+
+  <Step title="Test Application Connection">
+    Start the BookMe server:
+
+    ```bash
+    make run
+    ```
+
+    Check the logs for successful database connection:
+    ```
+    INFO database connection established
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Database Configuration Tips
+
+### Connection Pooling
+
+The application uses Go's `database/sql` package with SQLC, which provides built-in connection pooling.
+
+### Performance Tuning
+
+For production deployments, consider:
+
+- **Indexes**: The migrations include indexes on frequently queried columns
+- **Connection Limits**: PostgreSQL default is 100 connections
+- **Backup Strategy**: Set up regular automated backups
+
+### Backup and Restore
+
+#### Backup
+
+```bash
+pg_dump -U bookme -d bookme > bookme_backup.sql
+```
+
+#### Restore
+
+```bash
+psql -U bookme -d bookme < bookme_backup.sql
+```
+
+---
+
+## Troubleshooting
+
+### Connection Refused
+
+```
+connection refused
+```
+
+**Solution:** Ensure PostgreSQL is running:
+```bash
+pg_isready
+sudo systemctl status postgresql
+```
+
+### Authentication Failed
+
+```
+password authentication failed
+```
+
+**Solution:** Check your credentials in `DB_URL`. Verify user exists:
+```sql
+\du
+```
+
+### Database Does Not Exist
+
+```
+database "bookme" does not exist
+```
+
+**Solution:** Create the database:
+```bash
+createdb bookme
+```
+
+### Migration Failed
+
+**Solution:** Check which migrations are applied:
+```bash
+goose -dir sql/schema postgres "your-db-url" status
+```
+
+Rollback and retry:
+```bash
+goose -dir sql/schema postgres "your-db-url" down
+goose -dir sql/schema postgres "your-db-url" up
+```
+
+---
+
+## Next Steps
+
+After setting up your database:
+
+1. [Configure OAuth authentication](/setup/oauth-setup)
+2. [Set up email notifications](/setup/email-configuration)
+3. [Start making API calls](/quickstart)

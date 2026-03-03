@@ -1,0 +1,566 @@
+---
+title: "Testing"
+description: "Testing strategy, conventions, and running tests in BookMe"
+---
+
+## Overview
+
+BookMe uses Go's built-in testing framework with table-driven tests and comprehensive coverage across critical components. Tests focus on authentication, middleware, validation, and business logic.
+
+## Running Tests
+
+### Basic Test Execution
+
+<CodeGroup>
+```bash All Tests
+# Run all tests with verbose output
+make test
+
+# Equivalent to:
+go test -v ./...
+```
+
+```bash With Coverage
+# Generate HTML coverage report
+make test-coverage
+
+# Opens in browser automatically
+```
+
+```bash Specific Package
+# Test single package
+go test -v ./internal/auth
+
+# Test with coverage
+go test -cover ./internal/auth
+```
+
+```bash Watch Mode
+# Re-run tests on file changes (requires air)
+air -c .air-test.toml
+```
+</CodeGroup>
+
+### Coverage Reports
+
+The `make test-coverage` command (defined in `Makefile:22-24`) generates:
+
+1. `coverage.out` - Raw coverage data
+2. HTML report - Opens in browser
+
+```bash
+# Generate coverage without opening browser
+go test -coverprofile=coverage.out ./...
+
+# View coverage percentage
+go tool cover -func=coverage.out
+
+# Generate HTML
+go tool cover -html=coverage.out -o coverage.html
+```
+
+## Test Structure
+
+Tests are located alongside implementation files following Go conventions:
+
+| Test File | Purpose | Location |
+|-----------|---------|----------|
+| `auth_test.go` | JWT token operations | `internal/auth/` |
+| `auth_test.go` | Auth middleware | `internal/middleware/` |
+| `ratelimit_test.go` | Rate limiting | `internal/middleware/` |
+| `validator_test.go` | Input validation | `internal/validator/` |
+| `parser_test.go` | Request parsing | `internal/handler/` |
+| `email_service_test.go` | Email sending | `internal/email/` |
+| `calendar_test.go` | Google Calendar | `internal/google/` |
+
+## Testing Patterns
+
+### Table-Driven Tests
+
+Most tests use the table-driven pattern for comprehensive coverage.
+
+#### Example: Token Verification
+
+From `internal/auth/auth_test.go:45-112`:
+
+```go
+func TestVerifyAccessToken(t *testing.T) {
+    service := NewService("test-secret-key")
+    validToken, _ := service.IssueAccessToken(testUser)
+
+    tests := []struct {
+        name      string
+        token     string
+        wantErr   bool
+        checkFunc func(*testing.T, *CustomClaims)
+    }{
+        {
+            name:    "valid token",
+            token:   validToken,
+            wantErr: false,
+            checkFunc: func(t *testing.T, claims *CustomClaims) {
+                if claims.Name != "Jane Smith" {
+                    t.Errorf("expected name Jane Smith, got %s", claims.Name)
+                }
+            },
+        },
+        {
+            name:    "invalid token format",
+            token:   "invalid.token.string",
+            wantErr: true,
+        },
+        // ... more test cases
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            claims, err := service.VerifyAccessToken(tt.token)
+            if tt.wantErr {
+                if err == nil {
+                    t.Error("expected error, got nil")
+                }
+                return
+            }
+            if tt.checkFunc != nil {
+                tt.checkFunc(t, claims)
+            }
+        })
+    }
+}
+```
+
+### HTTP Handler Testing
+
+From `internal/middleware/auth_test.go:103-149`:
+
+```go
+func TestRequireAuth(t *testing.T) {
+    handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        w.Write([]byte("protected"))
+    })
+
+    wrappedHandler := RequireAuth(handler)
+
+    t.Run("blocks unauthenticated request", func(t *testing.T) {
+        req := httptest.NewRequest("GET", "/test", nil)
+        w := httptest.NewRecorder()
+
+        wrappedHandler.ServeHTTP(w, req)
+
+        if w.Code != http.StatusUnauthorized {
+            t.Errorf("expected status 401, got %d", w.Code)
+        }
+    })
+}
+```
+
+<Tip>
+Use `httptest.NewRecorder()` and `httptest.NewRequest()` for testing HTTP handlers without starting a real server.
+</Tip>
+
+## Test Categories
+
+### Authentication Tests
+
+**File**: `internal/auth/auth_test.go`  
+**Lines**: 281 total
+
+Tests cover:
+
+<AccordionGroup>
+  <Accordion title="Token Issuance (Lines 13-43)">
+    - `TestIssueAccessToken` - Generates valid JWT tokens
+    - Verifies token claims (user ID, name, role)
+    - Ensures tokens are parseable
+  </Accordion>
+
+  <Accordion title="Token Verification (Lines 45-112)">
+    - `TestVerifyAccessToken` - Validates JWT tokens
+    - Tests: valid tokens, invalid format, empty tokens, malformed tokens
+    - Verifies claim extraction
+  </Accordion>
+
+  <Accordion title="Security (Lines 114-131)">
+    - `TestVerifyAccessToken_WrongSecret` - Rejects tokens signed with different secret
+    - Ensures cryptographic security
+  </Accordion>
+
+  <Accordion title="Expiration (Lines 133-149)">
+    - `TestVerifyAccessToken_ExpiredToken` - Rejects expired tokens
+    - Sets TTL to -1 hour to simulate expiration
+    - Verifies `ErrExpiredToken` is returned
+  </Accordion>
+
+  <Accordion title="Bearer Token Extraction (Lines 151-215)">
+    - `TestGetBearerToken` - Parses Authorization header
+    - Tests: missing header, valid bearer, wrong scheme, empty token
+    - Edge case: tokens with leading spaces
+  </Accordion>
+
+  <Accordion title="Context Management (Lines 217-250)">
+    - `TestWithUserAndUserFromContext` - User storage in request context
+    - Tests retrieval from empty and populated contexts
+  </Accordion>
+
+  <Accordion title="Refresh Tokens (Lines 252-267)">
+    - `TestMakeRefreshToken` - Generates random refresh tokens
+    - Verifies 64-character hex output (32 bytes)
+    - Ensures uniqueness
+  </Accordion>
+</AccordionGroup>
+
+### Middleware Tests
+
+**File**: `internal/middleware/auth_test.go`  
+**Lines**: 203 total
+
+<Steps>
+  <Step title="Authenticate Middleware">
+    From lines 12-101:
+    
+    - Allows requests without tokens
+    - Authenticates valid Bearer tokens
+    - Gracefully handles invalid tokens
+    - Rejects malformed Authorization headers
+  </Step>
+
+  <Step title="RequireAuth Middleware">
+    From lines 103-149:
+    
+    - Blocks unauthenticated requests (401)
+    - Allows authenticated requests
+    - Sets correct Content-Type headers
+  </Step>
+
+  <Step title="Full Auth Flow">
+    From lines 151-202:
+    
+    - Chains Authenticate + RequireAuth middleware
+    - Tests complete authentication pipeline
+    - Verifies user context propagation
+  </Step>
+</Steps>
+
+**File**: `internal/middleware/ratelimit_test.go`
+
+Tests rate limiting functionality:
+- Token bucket algorithm
+- Per-IP rate limits
+- 429 Too Many Requests responses
+
+### Validation Tests
+
+**File**: `internal/validator/validator_test.go`
+
+Tests input validation:
+- Struct tag validation
+- Email format validation
+- Required field checks
+- Custom validation rules
+
+### Handler Tests
+
+**File**: `internal/handler/parser_test.go`
+
+Tests request parsing:
+- JSON body parsing
+- Query parameter extraction
+- URL path parameters
+- Error handling for malformed input
+
+### Service Tests
+
+**File**: `internal/email/email_service_test.go`
+
+Email functionality:
+- SMTP connection
+- Email template rendering
+- HTML and plain text emails
+- Error handling
+
+**File**: `internal/google/calendar_test.go`
+
+Google Calendar integration:
+- Service account authentication
+- Event creation
+- Calendar API calls
+- Error handling
+
+## Testing Conventions
+
+### Naming Conventions
+
+```go
+// Function name: TestFunctionName_Scenario
+func TestIssueAccessToken(t *testing.T) { }
+func TestVerifyAccessToken_WrongSecret(t *testing.T) { }
+func TestGetBearerToken(t *testing.T) { }
+
+// Subtests use descriptive names
+t.Run("valid bearer token", func(t *testing.T) { })
+t.Run("blocks unauthenticated request", func(t *testing.T) { })
+```
+
+### Test Data
+
+Use realistic test data:
+
+```go
+testUser := database.User{
+    ID:   123,
+    Name: "John Doe",
+    Role: "STUDENT",
+}
+```
+
+### Error Checking
+
+```go
+// Check specific errors with errors.Is
+if !errors.Is(err, ErrExpiredToken) {
+    t.Errorf("expected ErrExpiredToken, got %v", err)
+}
+
+// Check for any error
+if err != nil {
+    t.Fatalf("unexpected error: %v", err)
+}
+```
+
+### Assertions
+
+```go
+// Use t.Errorf for non-fatal failures
+if actual != expected {
+    t.Errorf("expected %s, got %s", expected, actual)
+}
+
+// Use t.Fatalf to stop test immediately
+if err != nil {
+    t.Fatalf("setup failed: %v", err)
+}
+```
+
+## Mocking and Test Doubles
+
+### HTTP Test Helpers
+
+```go
+// Create test request
+req := httptest.NewRequest("GET", "/test", nil)
+req.Header.Set("Authorization", "Bearer "+token)
+
+// Record response
+w := httptest.NewRecorder()
+
+// Test handler
+handler.ServeHTTP(w, req)
+
+// Assert response
+if w.Code != http.StatusOK {
+    t.Errorf("expected 200, got %d", w.Code)
+}
+```
+
+### Context Injection
+
+From `internal/middleware/auth_test.go:128-137`:
+
+```go
+// Add user to request context
+user := auth.User{
+    ID:   123,
+    Name: "Test User",
+    Role: "STUDENT",
+}
+ctx := auth.WithUser(req.Context(), user)
+req = req.WithContext(ctx)
+```
+
+## Writing New Tests
+
+### Test File Template
+
+```go
+package mypackage
+
+import (
+    "testing"
+)
+
+func TestMyFunction(t *testing.T) {
+    tests := []struct {
+        name    string
+        input   string
+        want    string
+        wantErr bool
+    }{
+        {
+            name:    "valid input",
+            input:   "test",
+            want:    "TEST",
+            wantErr: false,
+        },
+        {
+            name:    "empty input",
+            input:   "",
+            want:    "",
+            wantErr: true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got, err := MyFunction(tt.input)
+            
+            if tt.wantErr {
+                if err == nil {
+                    t.Error("expected error, got nil")
+                }
+                return
+            }
+            
+            if err != nil {
+                t.Fatalf("unexpected error: %v", err)
+            }
+            
+            if got != tt.want {
+                t.Errorf("expected %q, got %q", tt.want, got)
+            }
+        })
+    }
+}
+```
+
+### Best Practices
+
+<Steps>
+  <Step title="Test Behavior, Not Implementation">
+    Focus on what the function does, not how it does it.
+  </Step>
+
+  <Step title="Use Table-Driven Tests">
+    Define test cases in a slice for better coverage and maintainability.
+  </Step>
+
+  <Step title="Test Edge Cases">
+    Include: empty inputs, nil values, boundary conditions, invalid data.
+  </Step>
+
+  <Step title="Use Subtests">
+    Leverage `t.Run()` for organized test output and selective execution.
+  </Step>
+
+  <Step title="Clean Up Resources">
+    Use `defer` for cleanup or `t.Cleanup()` for test-specific cleanup.
+  </Step>
+</Steps>
+
+## Test Coverage Goals
+
+Target coverage for critical packages:
+
+- **auth**: 90%+ (security critical)
+- **middleware**: 85%+ (affects all requests)
+- **handler**: 80%+ (business logic)
+- **validator**: 90%+ (input validation)
+- **service**: 85%+ (core functionality)
+
+Check coverage:
+
+```bash
+go test -cover ./internal/auth
+# Output: coverage: 92.5% of statements
+```
+
+## Integration Testing
+
+While BookMe primarily uses unit tests, integration tests can be added:
+
+```go
+func TestDatabaseIntegration(t *testing.T) {
+    if testing.Short() {
+        t.Skip("skipping integration test")
+    }
+    
+    // Test actual database operations
+    db := setupTestDB(t)
+    defer cleanupTestDB(t, db)
+    
+    // Test queries against real database
+}
+```
+
+Run only unit tests:
+
+```bash
+go test -short ./...
+```
+
+Run all tests including integration:
+
+```bash
+go test ./...
+```
+
+## Continuous Integration
+
+Tests should pass before merging:
+
+```yaml .github/workflows/test.yml
+name: Test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+      - run: go test -v -race -coverprofile=coverage.out ./...
+      - run: go tool cover -func=coverage.out
+```
+
+## Troubleshooting Tests
+
+<AccordionGroup>
+  <Accordion title="Tests fail with database errors">
+    Tests requiring a database should be skipped or use an in-memory mock.
+    
+    Add skip condition:
+    ```go
+    if os.Getenv("DB_URL") == "" {
+        t.Skip("database not configured")
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Flaky tests">
+    Common causes:
+    - Time-dependent logic (use fixed time in tests)
+    - Race conditions (run with `-race` flag)
+    - External dependencies (mock them)
+    
+    Detect races:
+    ```bash
+    go test -race ./...
+    ```
+  </Accordion>
+
+  <Accordion title="Slow tests">
+    Profile test execution:
+    ```bash
+    go test -v -timeout 30s ./...
+    ```
+    
+    Optimize slow tests or mark as integration tests.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+- [Contributing Guide](/development/contributing) - Submit your tests
+- [Project Structure](/development/project-structure) - Understand where to add tests
+- [Building](/development/building) - Run tests as part of your workflow

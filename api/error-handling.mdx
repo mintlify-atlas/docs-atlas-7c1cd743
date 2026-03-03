@@ -1,0 +1,478 @@
+---
+title: 'Error Handling'
+description: 'Comprehensive guide to API error responses, validation errors, and troubleshooting'
+---
+
+The BookMe API uses standard HTTP status codes and returns detailed JSON error responses to help you understand and resolve issues quickly.
+
+## Error Response Format
+
+### Standard Error Response
+
+All errors return a JSON object with an `error` field:
+
+```json
+{
+  "error": "Error message describing what went wrong"
+}
+```
+
+Source: `internal/handler/response.go:14-17`
+
+### Validation Error Response
+
+Validation errors include additional `details` field with field-specific error messages:
+
+```json
+{
+  "error": "Validation failed",
+  "details": {
+    "startTime": "cannot be in the past",
+    "endTime": "must be after start time"
+  }
+}
+```
+
+Source: `internal/handler/response.go:14-17`, `internal/handler/response.go:28-34`
+
+## HTTP Status Codes
+
+The API uses standard HTTP status codes to indicate success or failure:
+
+| Status Code | Meaning | When It Occurs |
+|-------------|---------|----------------|
+| `200 OK` | Success | Request completed successfully |
+| `204 No Content` | Success (no body) | Successful deletion |
+| `400 Bad Request` | Client error | Invalid request data or validation failure |
+| `401 Unauthorized` | Authentication error | Missing or invalid JWT token |
+| `403 Forbidden` | Authorization error | Valid token but insufficient permissions |
+| `404 Not Found` | Resource not found | Requested resource doesn't exist |
+| `409 Conflict` | Resource conflict | Time slot already booked |
+| `429 Too Many Requests` | Rate limit exceeded | Too many requests from your IP |
+| `500 Internal Server Error` | Server error | Unexpected server-side error |
+| `504 Gateway Timeout` | Timeout | Request to external service timed out |
+
+## Error Categories
+
+### Validation Errors (400)
+
+Validation errors occur when request data doesn't meet the required format or business rules.
+
+<CodeGroup>
+```json Example Response
+{
+  "error": "Validation failed",
+  "details": {
+    "roomId": "is required",
+    "startTime": "must be a valid ISO 8601 timestamp",
+    "endTime": "must be after start time"
+  }
+}
+```
+
+```bash Example Request
+curl -X POST http://localhost:8080/api/v1/reservations \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "startTime": "2025-01-28T16:00:00Z",
+    "endTime": "2025-01-28T14:00:00Z"
+  }'
+```
+</CodeGroup>
+
+**Common Validation Errors:**
+
+- Missing required fields (`roomId`, `startTime`, `endTime`)
+- Invalid timestamp format (must be ISO 8601)
+- Start time in the past
+- End time before start time
+- Booking outside school hours (6:00 AM - 8:00 PM)
+- Duration exceeds maximum (4 hours for students)
+- Date range exceeds 60 days
+
+Source: `internal/handler/response.go:57-61`
+
+<Warning>
+Validation errors always return `400 Bad Request` with field-specific error details.
+</Warning>
+
+### Authentication Errors (401)
+
+Authentication errors occur when JWT token is missing, invalid, or expired.
+
+| Error Message | Cause | Solution |
+|---------------|-------|----------|
+| `no auth header included in request` | Missing `Authorization` header | Include `Authorization: Bearer <token>` header |
+| `bearer token is empty` | Empty token after "Bearer " | Provide valid JWT token |
+| `bearer token is incorrect` | Missing "Bearer " prefix | Use format `Bearer <token>` |
+| `invalid token` | Token signature validation failed | Re-authenticate to get new token |
+| `expired token` | Token older than 1 hour | Re-authenticate to get new token |
+
+Source: `internal/auth/auth.go:49-55`
+
+<CodeGroup>
+```json Error Response
+{
+  "error": "expired token"
+}
+```
+
+```bash Fix: Get New Token
+# Re-authenticate via OAuth
+curl http://localhost:8080/oauth/login
+```
+</CodeGroup>
+
+<Info>
+JWT tokens expire after **1 hour**. Implement token refresh logic in your application.
+</Info>
+
+### Authorization Errors (403)
+
+Authorization errors occur when authenticated user lacks permission for the requested action.
+
+#### Service Authorization Errors
+
+| Error Message | Status Code | When It Occurs |
+|---------------|-------------|----------------|
+| `you are not authorized to perform this action` | 403 | Generic authorization failure |
+| `unauthorized to cancel this reservation` | 403 | Non-owner/non-staff trying to cancel |
+
+Source: `internal/service/errors.go:40-43`, `internal/service/errors.go:60-63`
+
+#### OAuth Authorization Errors
+
+| Error Message | Status Code | When It Occurs |
+|---------------|-------------|----------------|
+| `oauth state mismatch` | 403 | CSRF protection - state token invalid |
+| `access denied: only helsinki campus student allowed` | 403 | User not from Hive Helsinki (campus_id ≠ 13) |
+| `invalid or missing state` | 403 | OAuth state validation failed |
+
+Source: `internal/oauth/errors.go:41-44`, `internal/oauth/errors.go:61-64`, `internal/oauth/errors.go:77-80`
+
+<Warning>
+**Campus Restriction**: Only users from Hive Helsinki (42 campus ID 13) can access the API.
+</Warning>
+
+### Not Found Errors (404)
+
+Returned when requested resource doesn't exist.
+
+| Error Message | What Doesn't Exist |
+|---------------|--------------------|
+| `reservation not found` | Reservation with given ID |
+| `room not found` | Room with given ID |
+
+Source: `internal/service/errors.go:36-39`, `internal/service/errors.go:44-47`
+
+<CodeGroup>
+```bash Example Request
+curl -X DELETE http://localhost:8080/api/v1/reservations/999 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```json Error Response
+{
+  "error": "reservation not found"
+}
+```
+</CodeGroup>
+
+### Conflict Errors (409)
+
+Returned when request conflicts with current state.
+
+| Error Message | Cause | Solution |
+|---------------|-------|----------|
+| `this time slot is already booked` | Overlapping reservation exists | Choose different time slot |
+
+Source: `internal/service/errors.go:48-51`
+
+<CodeGroup>
+```bash Example Request
+curl -X POST http://localhost:8080/api/v1/reservations \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "roomId": 1,
+    "startTime": "2025-01-28T14:00:00Z",
+    "endTime": "2025-01-28T16:00:00Z"
+  }'
+```
+
+```json Error Response
+{
+  "error": "this time slot is already booked"
+}
+```
+</CodeGroup>
+
+<Info>
+Use `GET /api/v1/reservations` to check available time slots before creating a reservation.
+</Info>
+
+### Bad Request Errors (400)
+
+Business logic violations that don't involve validation.
+
+| Error Message | Cause |
+|---------------|-------|
+| `reservation exceeds maximum allowed duration` | Student booking > 4 hours |
+| `invalid or missing oauth code` | OAuth authorization code missing |
+
+Source: `internal/service/errors.go:52-55`, `internal/oauth/errors.go:53-56`
+
+<Note>
+**Maximum Duration Rules:**
+- **Students**: 4 hours maximum
+- **Staff**: Unlimited
+</Note>
+
+### Server Errors (500)
+
+Internal server errors are logged and return generic error messages to clients.
+
+| Error Message | Internal Cause |
+|---------------|----------------|
+| `Internal server error` | Database error, service failure |
+| `failed to get User` | Database query failed |
+| `failed to fetch reservations` | Database query failed |
+| `oauth token exchange failed` | Failed to exchange code for token |
+| `failed to fetch user info from oauth provider` | Failed to get user data from 42 |
+| `failed to find or create user` | Database error during user creation |
+| `failed to get session` | Session storage error |
+| `failed to save session` | Session save error |
+
+Source: `internal/handler/response.go:63-75`, `internal/service/errors.go:32-35`, `internal/service/errors.go:56-59`, `internal/oauth/errors.go:45-76`
+
+<Warning>
+Server errors (5xx) are logged on the server side with full error details. The client receives a generic "Internal server error" message to avoid exposing sensitive information.
+</Warning>
+
+### Timeout Errors (504)
+
+| Error Message | Cause |
+|---------------|-------|
+| `oauth request timeout` | Request to 42 Intra API exceeded 15 seconds |
+
+Source: `internal/oauth/errors.go:57-60`
+
+## Error Handling Flow
+
+The API handles errors in a centralized manner:
+
+```go
+// Error handling priority
+1. Validation errors (400) → Return with field details
+2. Service errors (4xx/5xx) → Log 5xx, return message
+3. OAuth errors (4xx/5xx) → Log 5xx, return message
+4. Unknown errors (500) → Log error, return generic message
+```
+
+Source: `internal/handler/response.go:53-93`
+
+<Steps>
+  <Step title="Validation Check">
+    First, check if error is a `ValidationError`
+    
+    - Return `400 Bad Request` with field details
+    - No server-side logging (expected errors)
+  </Step>
+  
+  <Step title="Service Error Check">
+    Check if error is a `ServiceError`
+    
+    - If status ≥ 500: Log error and return "Internal server error"
+    - Otherwise: Return error message with status code
+  </Step>
+  
+  <Step title="OAuth Error Check">
+    Check if error is an `OauthError`
+    
+    - If status ≥ 500: Log error and return "Internal server error"
+    - Otherwise: Return error message with status code
+  </Step>
+  
+  <Step title="Unexpected Error">
+    Any other error type
+    
+    - Log error as "unexpected error"
+    - Return `500 Internal Server Error`
+  </Step>
+</Steps>
+
+## Best Practices
+
+### Client-Side Error Handling
+
+<CodeGroup>
+```javascript JavaScript
+async function createReservation(token, data) {
+  try {
+    const response = await fetch(
+      'http://localhost:8080/api/v1/reservations',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      }
+    );
+    
+    if (!response.ok) {
+      const error = await response.json();
+      
+      // Handle specific error types
+      switch (response.status) {
+        case 400:
+          // Validation error - show field-specific errors
+          if (error.details) {
+            Object.keys(error.details).forEach(field => {
+              console.error(`${field}: ${error.details[field]}`);
+            });
+          }
+          break;
+          
+        case 401:
+          // Token expired - redirect to login
+          window.location.href = '/oauth/login';
+          break;
+          
+        case 403:
+          // Not authorized
+          alert('You do not have permission to perform this action');
+          break;
+          
+        case 404:
+          // Resource not found
+          alert('Resource not found');
+          break;
+          
+        case 409:
+          // Conflict - time slot taken
+          alert('This time slot is already booked');
+          break;
+          
+        case 429:
+          // Rate limited - wait and retry
+          const retryAfter = response.headers.get('Retry-After');
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          return createReservation(token, data); // Retry
+          
+        case 500:
+        case 504:
+          // Server error - show generic message
+          alert('Server error. Please try again later.');
+          break;
+      }
+      
+      throw new Error(error.error);
+    }
+    
+    return await response.json();
+    
+  } catch (err) {
+    console.error('Request failed:', err);
+    throw err;
+  }
+}
+```
+
+```python Python
+import requests
+import time
+
+def create_reservation(token, data):
+    url = 'http://localhost:8080/api/v1/reservations'
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+    
+    response = requests.post(url, headers=headers, json=data)
+    
+    if not response.ok:
+        error = response.json()
+        
+        # Handle specific error types
+        if response.status_code == 400:
+            # Validation error
+            if 'details' in error:
+                for field, message in error['details'].items():
+                    print(f'{field}: {message}')
+            raise ValueError(error['error'])
+            
+        elif response.status_code == 401:
+            # Token expired
+            raise Exception('Token expired - please re-authenticate')
+            
+        elif response.status_code == 403:
+            raise Exception('Not authorized')
+            
+        elif response.status_code == 404:
+            raise Exception('Resource not found')
+            
+        elif response.status_code == 409:
+            raise Exception('Time slot already booked')
+            
+        elif response.status_code == 429:
+            # Rate limited - retry after delay
+            retry_after = int(response.headers.get('Retry-After', 6))
+            time.sleep(retry_after)
+            return create_reservation(token, data)
+            
+        else:
+            raise Exception(f'Server error: {error["error"]}')
+    
+    return response.json()
+```
+</CodeGroup>
+
+### Logging and Debugging
+
+<Info>
+The server logs all 5xx errors with full details. Check server logs for debugging internal errors:
+
+```
+ERROR service error error={...}
+ERROR oauth error error={...}
+ERROR unexpected error error={...}
+```
+</Info>
+
+### Rate Limit Handling
+
+Always check for `429` status and respect the `Retry-After` header:
+
+```javascript
+if (response.status === 429) {
+  const retryAfter = parseInt(response.headers.get('Retry-After'));
+  await sleep(retryAfter * 1000);
+  // Retry request
+}
+```
+
+See [Rate Limiting](/api/rate-limiting) for detailed information.
+
+## Error Reference
+
+### Quick Reference Table
+
+| Status | Error Type | Logged? | Details Field? |
+|--------|------------|---------|----------------|
+| 400 | Validation | No | Yes |
+| 400 | Bad Request | No | No |
+| 401 | Authentication | No | No |
+| 403 | Authorization | No | No |
+| 404 | Not Found | No | No |
+| 409 | Conflict | No | No |
+| 429 | Rate Limit | Yes (warn) | No |
+| 500 | Server Error | Yes (error) | No |
+| 504 | Timeout | No | No |
+
+<Note>
+All error responses include the `Content-Type: application/json` header except for rate limit errors which may return plain text.
+</Note>

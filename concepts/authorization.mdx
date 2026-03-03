@@ -1,0 +1,352 @@
+---
+title: Authorization
+description: Role-based access control and permission system in BookMe
+---
+
+BookMe implements role-based access control (RBAC) to manage what authenticated users can do. While authentication verifies *who* you are, authorization determines *what* you can do.
+
+## Role System
+
+BookMe has two user roles defined in `internal/service/reservation.go:20`:
+
+```go
+const (
+    RoleStudent = "STUDENT"
+    RoleStaff   = "STAFF"
+)
+```
+
+### Role Assignment
+
+Roles are automatically assigned during OAuth registration based on the 42 Intranet API response:
+
+```go
+// From internal/oauth/provider42.go:145
+role := service.RoleStudent
+if user42.Staff {
+    role = service.RoleStaff
+}
+
+user, err := db.CreateUser(ctx, database.CreateUserParams{
+    Email: user42.Email,
+    Name:  user42.Name,
+    Role:  role,
+})
+```
+
+<Info>
+Roles are determined by the `staff?` boolean field from the 42 API. Hive staff members automatically receive the `STAFF` role, while students receive `STUDENT`.
+</Info>
+
+### Role Storage
+
+Roles are:
+1. **Stored in database**: `users.role` column
+2. **Embedded in JWT**: Part of the token claims
+3. **Propagated via context**: Available to all handlers
+
+This design allows handlers to make authorization decisions without database lookups.
+
+## Permission Model
+
+BookMe uses a **permission-based authorization model** where each operation checks permissions inline rather than using a centralized permission system.
+
+### Reservation Permissions
+
+#### Creating Reservations
+
+All authenticated users can create reservations, but **students have duration limits**:
+
+```go
+// From internal/service/reservation.go:95
+duration := input.EndTime.Sub(input.StartTime)
+maxDuration := 4 * time.Hour
+
+if duration > maxDuration && input.UserRole == RoleStudent {
+    return nil, ErrExceedsMaxDuration
+}
+```
+
+**Permission Rules:**
+- **Students**: Maximum 4-hour reservation duration
+- **Staff**: No duration limit
+
+<Note>
+The 4-hour limit for students is hardcoded in the service layer. Staff members can book rooms for any duration to accommodate longer meetings or events.
+</Note>
+
+#### Viewing Reservations
+
+All authenticated users can view reservations, but **who made the reservation is conditionally visible**:
+
+```go
+// From internal/service/reservation.go:246
+for _, res := range roomReservations {
+    var bookedBy *string
+    
+    // Show bookedBy only if user is staff or is the owner
+    if isStaff || res.CreatedByID == input.UserID {
+        bookedBy = &res.CreatedByName
+    }
+    
+    slots = append(slots, dto.ReservedSlotDto{
+        ID:        res.ID,
+        StartTime: res.StartTime.UTC(),
+        EndTime:   res.EndTime.UTC(),
+        BookedBy:  bookedBy,
+    })
+}
+```
+
+**Permission Rules:**
+- **Everyone**: Can see all reservations (times and rooms)
+- **Staff**: Can see who made every reservation
+- **Students**: Can only see their own name on their reservations
+- **Privacy**: Other students' names are hidden from non-staff users
+
+<Accordion title="Why hide booking names?">
+This privacy feature prevents students from seeing who booked meeting rooms. Only staff members (who manage the facility) and the person who made the reservation can see the name.
+
+This helps prevent:
+- Unwanted interruptions of private meetings
+- Social pressure around room usage
+- Potential misuse of booking information
+</Accordion>
+
+#### Cancelling Reservations
+
+Reservation cancellation has the most complex authorization logic:
+
+```go
+// From internal/service/reservation.go:277
+reservation, err := s.db.GetReservationByID(ctx, input.ID)
+if err != nil {
+    if errors.Is(err, sql.ErrNoRows) {
+        return ErrReservationNotFound
+    }
+    return err
+}
+
+isStaff := input.UserRole == RoleStaff
+isOwner := reservation.UserID == input.UserID
+
+if !isStaff && !isOwner {
+    return ErrUnauthorizedCancellation
+}
+
+// Delete from database
+err = s.db.DeleteReservation(ctx, input.ID)
+```
+
+**Permission Rules:**
+- **Owners**: Can cancel their own reservations
+- **Staff**: Can cancel any reservation (useful for facility management)
+- **Other students**: Cannot cancel someone else's reservation
+
+<Warning>
+Attempting to cancel another user's reservation returns `ErrUnauthorizedCancellation`, which translates to a `403 Forbidden` HTTP response.
+</Warning>
+
+## Context-Based Authorization
+
+User information flows through the request using Go's `context.Context`:
+
+### Setting User Context
+
+```go
+// From internal/auth/auth.go:58
+func WithUser(ctx context.Context, user User) context.Context {
+    return context.WithValue(ctx, userKey, user)
+}
+```
+
+The `Authenticate` middleware populates this context after verifying the JWT token.
+
+### Retrieving User Context
+
+```go
+// From internal/auth/auth.go:63
+func UserFromContext(ctx context.Context) (User, bool) {
+    user, ok := ctx.Value(userKey).(User)
+    return user, ok
+}
+```
+
+Handlers and service methods extract the user from context to make authorization decisions.
+
+### User Structure
+
+The context contains a minimal user representation:
+
+```go
+// From internal/auth/auth.go:34
+type User struct {
+    ID   int64
+    Role string
+    Name string
+}
+```
+
+This avoids database queries for authorization checks—all necessary information is in the JWT claims.
+
+## Authorization in Handlers
+
+Handlers extract user information and pass it to service methods:
+
+```go
+// Example from internal/handler/handler_reservations.go
+user, ok := auth.UserFromContext(r.Context())
+if !ok {
+    // This shouldn't happen due to RequireAuth middleware
+    respondWithError(w, http.StatusUnauthorized, "unauthorized")
+    return
+}
+
+input := service.CreateReservationInput{
+    UserID:    user.ID,
+    UserName:  user.Name,
+    UserRole:  user.Role,  // Used for authorization in service layer
+    RoomID:    req.RoomID,
+    StartTime: req.StartTime,
+    EndTime:   req.EndTime,
+}
+
+reservation, err := h.reservation.CreateReservation(r.Context(), input)
+```
+
+The service layer receives the user's role and ID, enabling it to enforce business rules.
+
+## Middleware Chain
+
+Authorization works through a chain of middleware:
+
+```go
+// From internal/api/routes.go:42
+mux.Handle(
+    "POST /api/v1/reservations",
+    apiLimiter.Limit(
+        authenticate(
+            middleware.RequireAuth(
+                http.HandlerFunc(h.CreateReservation)))))
+```
+
+**Order of operations:**
+1. **Rate Limiter**: Prevents abuse
+2. **Authenticate**: Validates JWT, adds user to context
+3. **RequireAuth**: Rejects requests without valid user
+4. **Handler**: Accesses user from context
+
+<Tip>
+The `Authenticate` middleware is forgiving—it adds the user to context but doesn't fail the request. `RequireAuth` is what actually enforces the requirement.
+
+This two-stage approach allows the same `Authenticate` middleware to be used on both public and protected endpoints.
+</Tip>
+
+## Role Checking Patterns
+
+### Pattern 1: Role-Based Logic
+
+Simple boolean checks based on role:
+
+```go
+isStaff := user.Role == service.RoleStaff
+if isStaff {
+    // Staff-only logic
+}
+```
+
+### Pattern 2: Ownership Check
+
+Combining ownership with role:
+
+```go
+isStaff := input.UserRole == RoleStaff
+isOwner := reservation.UserID == input.UserID
+
+if !isStaff && !isOwner {
+    return ErrUnauthorizedCancellation
+}
+```
+
+This pattern is common for operations that allow "self-service" (owner can do it) or "administration" (staff can do it to anyone).
+
+### Pattern 3: Conditional Visibility
+
+Showing/hiding data based on permissions:
+
+```go
+var bookedBy *string
+if isStaff || res.CreatedByID == input.UserID {
+    bookedBy = &res.CreatedByName
+}
+```
+
+Using nullable fields (`*string`) allows the API to omit sensitive data without breaking the response structure.
+
+## Campus Validation
+
+Before even creating a user account, BookMe validates campus affiliation:
+
+```go
+// From internal/oauth/service.go:75
+isHive := false
+for _, camp := range user42.Campus {
+    if camp.ID == 13 && camp.Primary {
+        isHive = true
+        break
+    }
+}
+if !isHive {
+    return database.User{}, ErrInvalidCampus
+}
+```
+
+This prevents users from non-Hive campuses from registering, even if they have valid 42 credentials.
+
+<Note>
+Campus ID 13 is hardcoded as Hive Helsinki. Users must have this as their **primary** campus to register. This is a coarse-grained authorization check at the registration level.
+</Note>
+
+## Authorization Error Handling
+
+Authorization failures return specific error types:
+
+**Service-Level Errors:**
+- `ErrUnauthorizedCancellation`: Attempting to cancel someone else's reservation
+- `ErrInvalidCampus`: User from wrong campus trying to register
+- `ErrExceedsMaxDuration`: Student trying to book > 4 hours
+
+**HTTP Status Codes:**
+- `401 Unauthorized`: Not authenticated (no valid JWT)
+- `403 Forbidden`: Authenticated but not authorized (e.g., cancelling another user's reservation)
+- `400 Bad Request`: Business rule violation (e.g., duration limit)
+
+## Future Authorization Enhancements
+
+Potential authorization features not yet implemented:
+
+<Accordion title="Possible Future Features">
+1. **Admin Role**: Separate role for system administrators with full permissions
+2. **Room Permissions**: Certain rooms restricted to staff only
+3. **Time-Based Restrictions**: Different rules for peak vs. off-peak hours
+4. **Quota System**: Limit number of concurrent reservations per user
+5. **Blackout Periods**: Block certain dates/times for maintenance
+6. **Delegation**: Allow users to make reservations on behalf of others
+</Accordion>
+
+## Best Practices
+
+When working with authorization in BookMe:
+
+1. **Always check permissions in the service layer**, not just in handlers. Handlers can be bypassed; service methods are the real gatekeepers.
+
+2. **Use the user from context**, not from the request body. Clients can lie about their ID/role; the JWT is the source of truth.
+
+3. **Log authorization failures** for security monitoring:
+   ```go
+   slog.Warn("unauthorized access attempt", "user_id", user.ID, "action", "cancel_reservation")
+   ```
+
+4. **Return specific errors** to help with debugging, but avoid leaking sensitive information in error messages.
+
+5. **Test authorization paths** separately from happy paths. Ensure unauthorized actions are properly rejected.

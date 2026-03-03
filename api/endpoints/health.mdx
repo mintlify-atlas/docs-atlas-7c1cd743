@@ -1,0 +1,104 @@
+---
+title: "Health Check"
+description: "Monitor API and service health status"
+---
+
+## GET /api/v1/health
+
+The health check endpoint monitors the status of the API server and its critical dependencies. This endpoint is useful for monitoring systems, load balancers, and deployment health checks.
+
+### Authentication
+
+No authentication required.
+
+### Rate Limiting
+
+- **Rate**: 30 requests per 2 seconds per IP
+- **Status Code on Limit**: 429 Too Many Requests
+
+### Response
+
+The endpoint returns different HTTP status codes depending on system health:
+
+- **200 OK**: All services are healthy
+- **503 Service Unavailable**: One or more critical services are unhealthy
+
+<ResponseField name="status" type="string" required>
+  Overall system health status. Possible values: `healthy`, `unhealthy`
+</ResponseField>
+
+<ResponseField name="checks" type="object" required>
+  Health status of individual services
+  
+  <Expandable title="Service Checks">
+    <ResponseField name="database" type="string">
+      Database connectivity status. Values: `healthy`, `unhealthy`
+      
+      **Critical**: If unhealthy, overall status becomes `unhealthy`
+    </ResponseField>
+    
+    <ResponseField name="calendar" type="string">
+      Google Calendar API connectivity status. Values: `healthy`, `degraded`
+      
+      **Non-critical**: Does not affect overall health status
+    </ResponseField>
+    
+    <ResponseField name="email" type="string">
+      Email service status. Values: `healthy`, `unhealthy: service not initialized`
+      
+      **Critical**: If unhealthy, overall status becomes `unhealthy`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Healthy Response
+curl http://localhost:8080/api/v1/health
+```
+
+```json 200 OK - All Services Healthy
+{
+  "status": "healthy",
+  "checks": {
+    "calendar": "healthy",
+    "database": "healthy",
+    "email": "healthy"
+  }
+}
+```
+
+```json 503 Service Unavailable - Database Down
+{
+  "status": "unhealthy",
+  "checks": {
+    "calendar": "healthy",
+    "database": "unhealthy",
+    "email": "healthy"
+  }
+}
+```
+
+```json 200 OK - Calendar Degraded (Non-Critical)
+{
+  "status": "healthy",
+  "checks": {
+    "calendar": "degraded",
+    "database": "healthy",
+    "email": "healthy"
+  }
+}
+```
+
+</CodeGroup>
+
+### Implementation Details
+
+- **Timeout**: 6 seconds for all health checks
+- **Database Check**: Executes `PingContext()` to verify connectivity
+- **Calendar Check**: Calls Google Calendar API health check (non-critical)
+- **Email Check**: Verifies service initialization
+
+Source: `internal/handler/handler_health.go:19`

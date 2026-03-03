@@ -1,0 +1,418 @@
+---
+title: "Building the Project"
+description: "Learn how to build, run, and develop the BookMe API"
+---
+
+## Prerequisites
+
+Before building BookMe, ensure you have:
+
+- **Go 1.22+** installed
+- **PostgreSQL 14+** running
+- **Make** installed (optional but recommended)
+- Environment variables configured (see `.env.example`)
+
+<Note>
+The project uses Go 1.25.7 as specified in `go.mod:3`, but Go 1.22+ is the minimum requirement.
+</Note>
+
+## Quick Start
+
+<Steps>
+  <Step title="Install Dependencies">
+    Download and install all Go dependencies:
+    
+    ```bash
+    make deps
+    ```
+    
+    This runs:
+    - `go mod download` - Downloads dependencies
+    - `go mod tidy` - Cleans up unused dependencies
+  </Step>
+
+  <Step title="Set Up Environment">
+    Copy the example environment file:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` with your configuration (see [Environment Setup](/setup/environment)).
+  </Step>
+
+  <Step title="Run Database Migrations">
+    Apply database schema:
+    
+    ```bash
+    goose -dir sql/schema postgres "your-db-url" up
+    ```
+  </Step>
+
+  <Step title="Run the Server">
+    Start the development server:
+    
+    ```bash
+    make run
+    ```
+    
+    Server starts at `http://localhost:8080`
+  </Step>
+</Steps>
+
+## Build Commands
+
+### Available Make Targets
+
+The `Makefile` provides convenient commands for common tasks:
+
+<CodeGroup>
+```bash Development
+# Run with hot reload (requires air)
+make dev
+
+# Run without hot reload
+make run
+```
+
+```bash Building
+# Build production binary
+make build
+
+# Output: bin/book-me
+```
+
+```bash Testing
+# Run all tests
+make test
+
+# Run with coverage report
+make test-coverage
+```
+
+```bash Code Quality
+# Format code
+make fmt
+
+# Generate SQLC code
+make sqlc
+```
+
+```bash Maintenance
+# Clean build artifacts
+make clean
+
+# Update dependencies
+make deps
+```
+</CodeGroup>
+
+## Detailed Build Process
+
+### Building the Binary
+
+The build command is defined in `Makefile:12-15`:
+
+```bash
+make build
+```
+
+This creates a binary at `bin/book-me`. Run it directly:
+
+```bash
+./bin/book-me
+```
+
+<Tip>
+The binary is self-contained and can be deployed to any Linux/macOS system with the same architecture. Make sure to include your `.env` file or set environment variables.
+</Tip>
+
+### Running in Development
+
+#### Standard Run
+
+```bash
+make run
+```
+
+Executes `go run ./cmd/server`, which compiles and runs the application.
+
+#### Hot Reload Development
+
+For automatic reloading on file changes:
+
+1. Install Air:
+   ```bash
+   go install github.com/cosmtrek/air@latest
+   ```
+
+2. Run with hot reload:
+   ```bash
+   make dev
+   ```
+
+Air watches for file changes and automatically rebuilds the server.
+
+## Code Generation
+
+### SQLC - Type-Safe Database Queries
+
+BookMe uses SQLC to generate Go code from SQL queries.
+
+#### When to Regenerate
+
+Run `make sqlc` after:
+- Adding new SQL queries in `sql/queries/`
+- Modifying existing queries
+- Changing database schema in `sql/schema/`
+
+#### SQLC Workflow
+
+<Steps>
+  <Step title="Write SQL Query">
+    Add your query to the appropriate file in `sql/queries/`:
+    
+    ```sql sql/queries/users.sql
+    -- name: GetUserByID :one
+    SELECT * FROM users WHERE id = $1;
+    ```
+  </Step>
+
+  <Step title="Generate Go Code">
+    Run the generator:
+    
+    ```bash
+    make sqlc
+    ```
+  </Step>
+
+  <Step title="Use Generated Code">
+    SQLC creates type-safe functions in `internal/database/`:
+    
+    ```go
+    user, err := db.GetUserByID(ctx, userID)
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Generated files are committed to version control. This ensures consistent builds without requiring SQLC to be installed in production environments.
+</Note>
+
+## Code Formatting
+
+### Format Go Code
+
+```bash
+make fmt
+```
+
+Runs `go fmt ./...` to format all Go files according to standard conventions.
+
+### Linting
+
+The project uses `golangci-lint` with strict rules defined in `.golangci.yml:1-58`.
+
+Run the linter:
+
+```bash
+golangci-lint run
+```
+
+#### Enabled Linters
+
+The configuration includes:
+- **errcheck** - Checks for unchecked errors
+- **govet** - Reports suspicious constructs
+- **staticcheck** - Advanced analysis
+- **gosec** - Security issues
+- **revive** - Style and correctness
+- **bodyclose** - HTTP response body leaks
+- **errorlint** - Proper error handling
+- **exhaustive** - Missing switch cases
+
+<Tip>
+Test files have relaxed linting rules (`.golangci.yml:51-54`) to allow for more flexible testing patterns.
+</Tip>
+
+## Build Configuration
+
+### Binary Output
+
+Build configuration from `Makefile:14`:
+
+```makefile
+go build -o bin/book-me ./cmd/api
+```
+
+<Warning>
+Note: The Makefile references `./cmd/api`, but the actual directory is `./cmd/server`. If the build fails, update the Makefile to use the correct path.
+</Warning>
+
+### Application Entry Point
+
+The main function is in `cmd/server/main.go:22-26`:
+
+```go
+func main() {
+    if err := run(); err != nil {
+        slog.Error("server failed", "error", err)
+        os.Exit(1)
+    }
+}
+```
+
+The `run()` function handles:
+1. Configuration loading
+2. Logger initialization
+3. Database connection
+4. API setup
+5. HTTP server start
+6. Graceful shutdown
+
+## Environment-Specific Builds
+
+### Development Build
+
+No special flags needed:
+
+```bash
+go build -o bin/book-me ./cmd/server
+```
+
+### Production Build
+
+Optimize binary size and disable debug info:
+
+```bash
+go build -ldflags="-s -w" -o bin/book-me ./cmd/server
+```
+
+Flags:
+- `-s` - Omit symbol table
+- `-w` - Omit DWARF debug info
+
+### Cross-Compilation
+
+Build for different platforms:
+
+```bash
+# Linux AMD64
+GOOS=linux GOARCH=amd64 go build -o bin/book-me-linux ./cmd/server
+
+# macOS ARM64 (M1/M2)
+GOOS=darwin GOARCH=arm64 go build -o bin/book-me-mac ./cmd/server
+```
+
+## Dependencies
+
+### Core Dependencies
+
+From `go.mod:5-18`:
+
+| Package | Purpose |
+|---------|----------|
+| `github.com/golang-jwt/jwt/v5` | JWT authentication |
+| `github.com/lib/pq` | PostgreSQL driver |
+| `github.com/joho/godotenv` | Environment variables |
+| `github.com/go-playground/validator/v10` | Input validation |
+| `github.com/wneessen/go-mail` | Email sending |
+| `golang.org/x/oauth2` | OAuth2 client |
+| `google.golang.org/api` | Google Calendar API |
+| `golang.org/x/time` | Rate limiting |
+| `github.com/hashicorp/go-retryablehttp` | Retry logic |
+| `github.com/gorilla/sessions` | Session management |
+
+### Installing Dependencies
+
+All dependencies are defined in `go.mod`. Install with:
+
+```bash
+go mod download
+```
+
+Update to latest versions:
+
+```bash
+go get -u ./...
+go mod tidy
+```
+
+## Troubleshooting
+
+### Common Build Issues
+
+<AccordionGroup>
+  <Accordion title="Build fails with 'cmd/api not found'">
+    The Makefile references the wrong path. Update `Makefile:14`:
+    
+    ```diff
+    - go build -o bin/book-me ./cmd/api
+    + go build -o bin/book-me ./cmd/server
+    ```
+  </Accordion>
+
+  <Accordion title="Database connection errors">
+    Check:
+    1. PostgreSQL is running
+    2. `DB_URL` in `.env` is correct
+    3. Database exists and migrations are applied
+    
+    Test connection:
+    ```bash
+    psql "your-db-url"
+    ```
+  </Accordion>
+
+  <Accordion title="SQLC generation fails">
+    Ensure SQLC is installed:
+    ```bash
+    go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+    ```
+    
+    Verify `sqlc.yaml` configuration is correct.
+  </Accordion>
+
+  <Accordion title="Missing environment variables">
+    The server will fail if required env vars are missing. Check `internal/config/config.go` for required fields.
+    
+    Copy and configure:
+    ```bash
+    cp .env.example .env
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Docker Build (Optional)
+
+While not included in the repository, you can create a Dockerfile:
+
+```dockerfile
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -ldflags="-s -w" -o bin/book-me ./cmd/server
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=builder /app/bin/book-me .
+COPY --from=builder /app/.env .
+EXPOSE 8080
+CMD ["./book-me"]
+```
+
+Build and run:
+
+```bash
+docker build -t bookme:latest .
+docker run -p 8080:8080 bookme:latest
+```
+
+## Next Steps
+
+- [Testing Guide](/development/testing) - Learn about the test suite
+- [Project Structure](/development/project-structure) - Understand the codebase
+- [Contributing](/development/contributing) - Submit your first PR

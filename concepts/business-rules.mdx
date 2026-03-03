@@ -1,0 +1,484 @@
+---
+title: Business Rules
+description: Validation rules and business logic governing reservations in BookMe
+---
+
+BookMe enforces strict business rules to manage meeting room reservations fairly and efficiently. These rules are implemented across validation and service layers.
+
+## Validation Rules
+
+BookMe uses the `go-playground/validator` library with custom validators for complex business rules.
+
+### Custom Validators
+
+The system defines several custom validators in `internal/validator/validator.go:12`:
+
+```go
+validate.RegisterValidation("futureTime", validateFutureTime)
+validate.RegisterValidation("schoolHours", validateSchoolHours)
+validate.RegisterValidation("maxDateRange", validateMaxDateRange)
+validate.RegisterValidation("utc", validateUTC)
+```
+
+### Future Time Validation
+
+Reservations must be in the future—you cannot book a room in the past:
+
+```go
+// From internal/validator/validator.go:57
+func validateFutureTime(fl validator.FieldLevel) bool {
+    t, ok := fl.Field().Interface().(time.Time)
+    if !ok {
+        return false
+    }
+    return t.After(time.Now())
+}
+```
+
+**Error Message**: "Time must be in the future"
+
+<Note>
+This validation uses the server's current time. Ensure your server clock is accurate, or you may reject valid requests or accept invalid ones.
+</Note>
+
+### School Hours Validation
+
+Reservations must be within Hive Helsinki operating hours (6:00 AM to 8:00 PM):
+
+```go
+// From internal/validator/validator.go:75
+var (
+    schoolOpenHour   = 6   // 6 AM
+    schoolCloseHour  = 20  // 8 PM
+    helsinkiTZ, _ = time.LoadLocation("Europe/Helsinki")
+)
+
+func validateSchoolHours(fl validator.FieldLevel) bool {
+    t, ok := fl.Field().Interface().(time.Time)
+    if !ok {
+        return false
+    }
+    
+    hour := t.In(helsinkiTZ).Hour()
+    return hour >= schoolOpenHour && hour < schoolCloseHour
+}
+```
+
+**Key Details:**
+- Hours are checked in **Europe/Helsinki timezone**
+- Start time must be ≥ 6:00 AM
+- End time must be < 8:00 PM (20:00)
+- Times outside this range are rejected
+
+**Error Message**: "Time must be between 6:00 AM and 8:00 PM"
+
+<Warning>
+Both `start_time` and `end_time` must fall within school hours. A reservation starting at 7:00 PM and ending at 9:00 PM will be rejected because the end time is after 8:00 PM.
+</Warning>
+
+### UTC Time Validation
+
+All times must be provided in UTC format to avoid timezone confusion:
+
+```go
+// From internal/validator/validator.go:65
+func validateUTC(fl validator.FieldLevel) bool {
+    t, ok := fl.Field().Interface().(time.Time)
+    if !ok {
+        return false
+    }
+    _, offset := t.Zone()
+    return offset == 0
+}
+```
+
+**Error Message**: "Time must be in UTC format (e.g. 2026-02-23T06:00:00Z)"
+
+<Info>
+Clients must send times in UTC (e.g., `2026-03-03T14:00:00Z`). The server converts to Europe/Helsinki for business rule validation but stores times in UTC in the database.
+</Info>
+
+### Date Range Validation
+
+When querying reservations, the date range cannot exceed 60 days:
+
+```go
+// From internal/validator/validator.go:86
+const maxDateRangeDays = 60
+
+func validateMaxDateRange(fl validator.FieldLevel) bool {
+    endDate, ok := fl.Field().Interface().(time.Time)
+    if !ok {
+        return false
+    }
+    
+    startDateField := fl.Parent().FieldByName("StartDate")
+    startDate, ok := startDateField.Interface().(time.Time)
+    if !ok {
+        return false
+    }
+    
+    diff := endDate.Sub(startDate)
+    return diff.Hours() <= float64(maxDateRangeDays*24)
+}
+```
+
+**Error Message**: "Date range cannot exceed 60 days"
+
+This prevents expensive database queries and ensures API performance.
+
+## Reservation Business Rules
+
+### Duration Limits
+
+Students can only book meeting rooms for up to 4 hours:
+
+```go
+// From internal/service/reservation.go:95
+duration := input.EndTime.Sub(input.StartTime)
+maxDuration := 4 * time.Hour
+
+if duration > maxDuration && input.UserRole == RoleStudent {
+    return nil, ErrExceedsMaxDuration
+}
+```
+
+**Role-Based Limits:**
+- **Students**: ≤ 4 hours per reservation
+- **Staff**: No limit
+
+**Error**: `ErrExceedsMaxDuration` → `400 Bad Request`
+
+<Accordion title="Why limit student reservations to 4 hours?">
+This prevents a single student from monopolizing a meeting room for an entire day. Staff members, who may need rooms for longer events, workshops, or administrative purposes, are exempt from this limit.
+
+If students need a room longer than 4 hours, they can:
+- Make multiple back-to-back reservations (if no conflicts)
+- Request staff assistance for special events
+</Accordion>
+
+### Conflict Detection
+
+The most critical business rule: **no overlapping reservations** for the same room.
+
+```go
+// From internal/service/reservation.go:121
+overlap, err := qtx.ExistsOverlappingReservation(ctx, database.ExistsOverlappingReservationParams{
+    RoomID:    input.RoomID,
+    StartTime: input.EndTime,
+    EndTime:   input.StartTime,
+})
+
+if overlap {
+    return nil, ErrTimeSlotTaken
+}
+```
+
+The overlap check uses database-level logic with SQL:
+
+```sql
+-- Checks for any reservation where:
+-- (new_start < existing_end) AND (new_end > existing_start)
+SELECT EXISTS(
+    SELECT 1 FROM reservations
+    WHERE room_id = $1
+      AND start_time < $2  -- input.EndTime
+      AND end_time > $3    -- input.StartTime
+      AND status = 'RESERVED'
+) AS exists
+```
+
+**Conflict Scenarios:**
+
+| Existing | New Reservation | Result |
+|----------|----------------|--------|
+| 10:00-12:00 | 11:00-13:00 | ❌ Conflict |
+| 10:00-12:00 | 12:00-14:00 | ✅ Allowed |
+| 10:00-12:00 | 09:00-11:00 | ❌ Conflict |
+| 10:00-12:00 | 14:00-16:00 | ✅ Allowed |
+
+<Note>
+Back-to-back reservations are allowed. A reservation ending at 12:00 does not conflict with one starting at 12:00.
+</Note>
+
+### Transaction Isolation
+
+Conflict detection happens inside a database transaction:
+
+```go
+// From internal/service/reservation.go:103
+tx, err := s.db.BeginTx(ctx, &sql.TxOptions{
+    Isolation: sql.LevelReadCommitted,
+})
+```
+
+**Why transactions are critical:**
+
+Imagine two users trying to book the same room at the same time:
+
+1. User A checks for conflicts → None found
+2. User B checks for conflicts → None found
+3. User A creates reservation → Success
+4. User B creates reservation → Success (but now there's a conflict!)
+
+Transactions prevent this race condition. With `LevelReadCommitted` isolation:
+
+1. User A starts transaction, checks conflicts → None
+2. User B starts transaction, checks conflicts → None
+3. User A inserts reservation and commits
+4. User B tries to insert → conflict detected by database constraint or second check
+
+<Warning>
+The overlap check must happen inside the same transaction as the insert. If you check outside the transaction, you'll have race conditions during high traffic.
+</Warning>
+
+## Room Validation
+
+Reservations must reference a valid room:
+
+```go
+// From internal/service/reservation.go:86
+room, err := s.db.GetRoomByID(ctx, input.RoomID)
+if err != nil {
+    if errors.Is(err, sql.ErrNoRows) {
+        return nil, ErrRoomNotFound
+    }
+    return nil, err
+}
+```
+
+**Error**: `ErrRoomNotFound` → `404 Not Found`
+
+This prevents reservations for non-existent rooms.
+
+## Asynchronous Operations
+
+After creating a reservation, BookMe triggers two asynchronous operations:
+
+### Calendar Event Creation
+
+```go
+// From internal/service/reservation.go:156
+go func() {
+    ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+    defer cancel()
+    
+    calendarReservation := &google.Reservation{
+        StartTime: reservation.StartTime,
+        EndTime:   reservation.EndTime,
+        CreatedBy: input.UserName,
+        Room:      room.Name,
+    }
+    
+    eventID, err := s.calendar.CreateGoogleEvent(ctx, calendarReservation)
+    if err != nil {
+        slog.Error("Failed to create Google Calendar event", "error", err)
+        return
+    }
+    
+    // Update reservation with event ID
+    if eventID != "" {
+        s.db.UpdateGoogleCalID(ctx, database.UpdateGoogleCalIDParams{
+            ID:          reservation.ID,
+            GcalEventID: sql.NullString{String: eventID, Valid: true},
+        })
+    }
+}()
+```
+
+**Key Points:**
+- Runs in a goroutine (non-blocking)
+- Has its own 40-second timeout
+- Failures are logged but don't affect the reservation
+- Event ID is stored back in the database for future reference
+
+### Email Confirmation
+
+```go
+// From internal/service/reservation.go:186
+go func() {
+    emailCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+    defer cancel()
+    
+    if err := s.email.SendConfirmation(
+        emailCtx,
+        dbUser.Email,
+        room.Name,
+        reservation.StartTime.Format("Monday, January 2, 2006 at 3:04 PM"),
+        reservation.EndTime.Format("Monday, January 2, 2006 at 3:04 PM"),
+    ); err != nil {
+        slog.Error("failed to send confirmation email", "error", err)
+    }
+}()
+```
+
+**Key Points:**
+- Runs in a goroutine (non-blocking)
+- Has its own 40-second timeout
+- Failures are logged but don't affect the reservation
+- Uses HTML email templates from `internal/email/templates/`
+
+<Info>
+Asynchronous operations improve user experience—the API responds immediately without waiting for email delivery or calendar creation. This is critical for responsiveness.
+
+However, it means these operations can fail silently. Monitor logs for failures.
+</Info>
+
+## Retry Logic
+
+Both email and calendar services implement automatic retry:
+
+**Email Service** (`internal/email/email_service.go:111`):
+```go
+retry.Do(
+    retry.Attempts(3),
+    retry.Delay(4*time.Second),
+    retry.MaxDelay(10*time.Second),
+    retry.Context(ctx),
+)
+```
+
+**Calendar Service** (`internal/google/calender.go:50`):
+```go
+retryClient := retryablehttp.NewClient()
+retryClient.RetryMax = 3
+retryClient.RetryWaitMin = 4 * time.Second
+retryClient.RetryWaitMax = 10 * time.Second
+```
+
+This handles transient network failures gracefully.
+
+## Cancellation Rules
+
+Cancelling a reservation involves several business rules:
+
+### Authorization Check
+
+```go
+// From internal/service/reservation.go:286
+isStaff := input.UserRole == RoleStaff
+isOwner := reservation.UserID == input.UserID
+
+if !isStaff && !isOwner {
+    return ErrUnauthorizedCancellation
+}
+```
+
+**Who can cancel:**
+- The user who created the reservation
+- Any staff member
+
+**Error**: `ErrUnauthorizedCancellation` → `403 Forbidden`
+
+### Existence Check
+
+```go
+// From internal/service/reservation.go:278
+reservation, err := s.db.GetReservationByID(ctx, input.ID)
+if err != nil {
+    if errors.Is(err, sql.ErrNoRows) {
+        return ErrReservationNotFound
+    }
+    return err
+}
+```
+
+**Error**: `ErrReservationNotFound` → `404 Not Found`
+
+### Cascade Deletion
+
+When a reservation is cancelled:
+
+1. **Database record deleted**:
+   ```go
+   err = s.db.DeleteReservation(ctx, input.ID)
+   ```
+
+2. **Google Calendar event deleted** (asynchronous):
+   ```go
+   go func() {
+       ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+       defer cancel()
+       s.calendar.DeleteGoogleEvent(ctx, reservation.GcalEventID.String)
+   }()
+   ```
+
+<Warning>
+There's no email sent when a reservation is cancelled. This is a potential enhancement—users currently don't receive confirmation that their reservation was deleted.
+</Warning>
+
+## Time Zone Handling
+
+BookMe carefully manages timezones:
+
+1. **API Input**: All times must be in UTC
+2. **Validation**: Converted to `Europe/Helsinki` for business rule checks
+3. **Database Storage**: Stored in UTC
+4. **Calendar Events**: Sent to Google Calendar in `Europe/Helsinki`
+5. **API Output**: Returned in UTC
+
+```go
+// Example from internal/service/reservation.go:254
+slots = append(slots, dto.ReservedSlotDto{
+    StartTime: res.StartTime.UTC(),
+    EndTime:   res.EndTime.UTC(),
+})
+```
+
+<Tip>
+Always work with UTC in your client applications. Convert to local time only for display purposes. This avoids daylight saving time issues and makes the system work globally.
+</Tip>
+
+## Error Messages
+
+Validation errors are formatted to be user-friendly:
+
+```go
+// From internal/validator/validator.go:121
+func formatFieldError(err validator.FieldError) string {
+    switch err.Tag() {
+    case "required":
+        return "This field is required"
+    case "futureTime":
+        return "Time must be in the future"
+    case "schoolHours":
+        return "Time must be between 6:00 AM and 8:00 PM"
+    case "maxDateRange":
+        return "Date range cannot exceed 60 days"
+    case "utc":
+        return "Time must be in UTC format (e.g. 2026-02-23T06:00:00Z)"
+    default:
+        return fmt.Sprintf("Validation failed on '%s'", err.Tag())
+    }
+}
+```
+
+These messages are returned in the API response:
+
+```json
+{
+  "error": "validation failed",
+  "fields": {
+    "start_time": "Time must be between 6:00 AM and 8:00 PM",
+    "end_time": "Time must be in the future"
+  }
+}
+```
+
+## Business Rules Summary
+
+| Rule | Applies To | Enforcement Layer | Error |
+|------|-----------|-------------------|-------|
+| Times in UTC | All requests | Validator | 400 Bad Request |
+| Times in future | Reservations | Validator | 400 Bad Request |
+| School hours (6 AM - 8 PM) | Reservations | Validator | 400 Bad Request |
+| Valid room ID | Reservations | Service | 404 Not Found |
+| No overlapping reservations | Reservations | Service + DB | 409 Conflict |
+| Max 4-hour duration | Students only | Service | 400 Bad Request |
+| Max 60-day query range | Queries | Validator | 400 Bad Request |
+| Owner or staff can cancel | Cancellations | Service | 403 Forbidden |
+| Hive Helsinki campus only | Registration | OAuth Service | 403 Forbidden |
+
+<Note>
+Business rules are enforced in multiple layers for defense in depth. Validators catch malformed input early, while service methods enforce domain logic. Database constraints provide a final safety net.
+</Note>

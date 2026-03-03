@@ -1,0 +1,171 @@
+---
+title: Introduction
+description: Welcome to BookMe - A modern meeting room reservation backend API for Hive Helsinki
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.png"
+  alt="BookMe Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.png"
+  alt="BookMe Hero Dark"
+/>
+
+## Welcome to BookMe
+
+BookMe is a production-ready REST API for managing meeting room reservations at Hive Helsinki. Built with Go and PostgreSQL, it provides secure authentication, role-based access control, and seamless Google Calendar integration.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running with BookMe in under 5 minutes
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/overview"
+  >
+    Explore all available endpoints and request/response formats
+  </Card>
+  <Card
+    title="Authentication"
+    icon="shield-halved"
+    href="/api/authentication-flow"
+  >
+    Learn about 42 Intra OAuth2 and JWT authentication
+  </Card>
+  <Card
+    title="GitHub Repository"
+    icon="github"
+    href="https://github.com/IbnBaqqi/book-me"
+  >
+    View the source code and contribute to the project
+  </Card>
+</CardGroup>
+
+## Key Features
+
+### 42 Intra OAuth2 Authentication
+
+Secure authentication using Hive Helsinki's 42 Intranet. Users log in with their existing credentials, and the API handles token management automatically.
+
+### Smart Booking Logic
+
+The API prevents overlapping reservations and enforces business rules:
+- No double-booking of rooms
+- Validation of reservation times within school hours
+- Automatic conflict detection
+
+### Role-Based Access Control
+
+Two distinct user roles with different permissions:
+
+<CardGroup cols={2}>
+  <Card title="Staff" icon="user-tie">
+    - View who booked each time slot
+    - Cancel any reservation
+    - Sync bookings with Google Calendar
+  </Card>
+  <Card title="Student" icon="user">
+    - View room availability
+    - Create reservations
+    - Cancel only their own bookings
+  </Card>
+</CardGroup>
+
+### Email Notifications
+
+Automatic email confirmations sent via SMTP for:
+- New reservations
+- Cancellations
+- Booking updates
+
+### Google Calendar Integration
+
+Staff members can sync room reservations directly to Google Calendar, ensuring visibility across platforms.
+
+## Available Rooms
+
+BookMe manages two meeting rooms at Hive Helsinki:
+
+- **Big Room** (Room ID: 1) - For larger meetings and events
+- **Small Room** (Room ID: 2) - For smaller team discussions
+
+## Tech Stack
+
+<CardGroup cols={3}>
+  <Card title="Go 1.22+" icon="golang">
+    Modern, performant backend language with excellent concurrency
+  </Card>
+  <Card title="PostgreSQL 14+" icon="database">
+    Robust relational database with SQLC for type-safe queries
+  </Card>
+  <Card title="Standard Library" icon="code">
+    Built with Go's net/http - no external web frameworks required
+  </Card>
+</CardGroup>
+
+<Note>
+  BookMe uses SQLC to generate type-safe Go code from SQL queries, ensuring compile-time safety and eliminating common database errors.
+</Note>
+
+## Architecture Overview
+
+BookMe follows a clean architecture pattern:
+
+```
+HTTP Request
+    ↓
+Middleware (Rate Limiting, Auth)
+    ↓
+Handler Layer (HTTP)
+    ↓
+Service Layer (Business Logic)
+    ↓
+Database Layer (SQLC Generated)
+    ↓
+PostgreSQL
+```
+
+## API Base URL
+
+The production API is available at:
+
+```
+https://room.hive.fi/api/v1
+```
+
+For local development:
+
+```
+http://localhost:8080/api/v1
+```
+
+## What's Next?
+
+<CardGroup cols={2}>
+  <Card
+    title="Get Started"
+    icon="play"
+    href="/quickstart"
+  >
+    Follow the quickstart guide to make your first API call
+  </Card>
+  <Card
+    title="Explore Endpoints"
+    icon="book"
+    href="/api/endpoints/reservations"
+  >
+    Learn how to create, retrieve, and cancel reservations
+  </Card>
+</CardGroup>
+
+<Tip>
+  Join the Hive Helsinki community to discuss features, report issues, or contribute to BookMe's development.
+</Tip>

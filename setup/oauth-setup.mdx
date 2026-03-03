@@ -1,0 +1,413 @@
+---
+title: "42 OAuth Setup"
+description: "Configure 42 Intra OAuth authentication for the BookMe API"
+---
+
+## Overview
+
+BookMe uses **42 Intra OAuth 2.0** for authentication. This provides secure, single sign-on access for Hive Helsinki students and staff.
+
+<Info>
+  42 OAuth is the only supported authentication method. Users must have a valid 42 Intra account to access the system.
+</Info>
+
+---
+
+## Create OAuth Application
+
+<Steps>
+  <Step title="Access 42 Intra">
+    Navigate to the 42 API applications page:
+
+    **[https://profile.intra.42.fr/oauth/applications/new](https://profile.intra.42.fr/oauth/applications/new)**
+
+    Log in with your 42 Intra credentials.
+  </Step>
+
+  <Step title="Create New Application">
+    Fill in the application details:
+
+    **Name:** `BookMe - Hive Helsinki` (or your preferred name)
+
+    **Redirect URI:**
+    ```
+    http://localhost:8080/oauth/callback
+    ```
+
+    <Note>
+      For production, use your production domain:
+      ```
+      https://api.yourdomain.com/oauth/callback
+      ```
+    </Note>
+  </Step>
+
+  <Step title="Select Scopes">
+    Under **Scopes**, select:
+    - ✅ **Access the user public data**
+
+    This allows the application to read:
+    - User email
+    - Username
+    - Profile information
+  </Step>
+
+  <Step title="Save Application">
+    Click **Submit** to create the application.
+
+    You'll receive:
+    - **Client ID** (UID)
+    - **Client Secret** (Secret)
+
+    <Warning>
+      Save these credentials immediately. The client secret is only shown once.
+    </Warning>
+  </Step>
+</Steps>
+
+---
+
+## Configure Environment Variables
+
+Add your OAuth credentials to `.env`:
+
+```bash
+# OAuth Application Credentials
+CLIENT_ID=your-42-client-id
+SECRET=your-42-client-secret
+
+# Backend OAuth Callback
+REDIRECT_URI=http://localhost:8080/oauth/callback
+
+# Frontend Redirect (after successful auth)
+REDIRECT_TOKEN_URI=http://localhost:3000/auth/callback
+
+# 42 API Endpoints
+OAUTH_AUTH_URI=https://api.intra.42.fr/oauth/authorize
+OAUTH_TOKEN_URI=https://api.intra.42.fr/oauth/token
+USER_INFO_URL=https://api.intra.42.fr/v2/me
+```
+
+### Variable Descriptions
+
+| Variable | Description |
+|----------|-------------|
+| `CLIENT_ID` | Your 42 OAuth application client ID (UID) |
+| `SECRET` | Your 42 OAuth application client secret |
+| `REDIRECT_URI` | Backend endpoint that handles OAuth callback |
+| `REDIRECT_TOKEN_URI` | Frontend URL to redirect user after login |
+| `OAUTH_AUTH_URI` | 42 authorization endpoint (fixed) |
+| `OAUTH_TOKEN_URI` | 42 token endpoint (fixed) |
+| `USER_INFO_URL` | 42 user info API endpoint (fixed) |
+
+---
+
+## OAuth Flow
+
+BookMe implements the standard OAuth 2.0 authorization code flow:
+
+<Steps>
+  <Step title="User Initiates Login">
+    Frontend redirects user to:
+    ```
+    GET /oauth/login
+    ```
+  </Step>
+
+  <Step title="Redirect to 42">
+    Backend redirects to 42 Intra with:
+    ```
+    https://api.intra.42.fr/oauth/authorize?
+      client_id=YOUR_CLIENT_ID&
+      redirect_uri=http://localhost:8080/oauth/callback&
+      response_type=code&
+      scope=public
+    ```
+  </Step>
+
+  <Step title="User Authorizes">
+    User logs in at 42 Intra and authorizes the application.
+  </Step>
+
+  <Step title="Receive Authorization Code">
+    42 redirects back to:
+    ```
+    GET /oauth/callback?code=AUTHORIZATION_CODE
+    ```
+  </Step>
+
+  <Step title="Exchange for Access Token">
+    Backend exchanges authorization code for access token:
+    ```
+    POST https://api.intra.42.fr/oauth/token
+    ```
+  </Step>
+
+  <Step title="Fetch User Info">
+    Backend retrieves user profile:
+    ```
+    GET https://api.intra.42.fr/v2/me
+    ```
+  </Step>
+
+  <Step title="Create User & JWT">
+    Backend:
+    - Creates or updates user in database
+    - Generates JWT token
+    - Redirects to frontend with token:
+    ```
+    http://localhost:3000/auth/callback?token=JWT_TOKEN
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Frontend Integration
+
+### Login Button
+
+In your frontend application, create a login button that redirects to:
+
+```javascript
+const handleLogin = () => {
+  window.location.href = 'http://localhost:8080/oauth/login';
+};
+```
+
+### Handle Callback
+
+Create a callback route at `/auth/callback` to receive the JWT:
+
+```javascript
+// Example: React component
+import { useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+
+function AuthCallback() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = searchParams.get('token');
+    if (token) {
+      // Store token
+      localStorage.setItem('authToken', token);
+      // Redirect to dashboard
+      navigate('/dashboard');
+    } else {
+      // Handle error
+      navigate('/login?error=auth_failed');
+    }
+  }, [searchParams, navigate]);
+
+  return <div>Authenticating...</div>;
+}
+```
+
+### Make Authenticated Requests
+
+Include the JWT in the `Authorization` header:
+
+```javascript
+const token = localStorage.getItem('authToken');
+
+fetch('http://localhost:8080/api/v1/reservations', {
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  },
+});
+```
+
+---
+
+## Production Configuration
+
+### Update Redirect URIs
+
+For production deployment:
+
+<Steps>
+  <Step title="Update 42 Application">
+    Go to your 42 OAuth application settings and add your production redirect URI:
+
+    ```
+    https://api.yourdomain.com/oauth/callback
+    ```
+  </Step>
+
+  <Step title="Update Environment Variables">
+    ```bash
+    REDIRECT_URI=https://api.yourdomain.com/oauth/callback
+    REDIRECT_TOKEN_URI=https://yourdomain.com/auth/callback
+    ```
+  </Step>
+</Steps>
+
+### CORS Configuration
+
+Ensure your backend allows requests from your frontend domain. See source code at `internal/api/api.go` for CORS middleware configuration.
+
+---
+
+## JWT Token Structure
+
+BookMe issues JWT tokens with the following claims:
+
+```json
+{
+  "sub": "user-uuid",
+  "email": "user@student.hive.fi",
+  "username": "username",
+  "role": "student",
+  "exp": 1234567890,
+  "iat": 1234567890
+}
+```
+
+| Claim | Description |
+|-------|-------------|
+| `sub` | User ID (UUID) |
+| `email` | User email from 42 profile |
+| `username` | 42 username |
+| `role` | User role: `student` or `staff` |
+| `exp` | Token expiration timestamp |
+| `iat` | Token issued at timestamp |
+
+<Note>
+  JWT tokens are signed using the `JWT_SECRET` from your environment configuration. See `internal/auth/auth.go:18` for implementation details.
+</Note>
+
+---
+
+## User Roles
+
+BookMe assigns roles based on 42 Intra user type:
+
+### Student
+
+- Can create reservations
+- Can view their own reservations
+- Can cancel their own reservations
+- Cannot see who booked other time slots
+
+### Staff
+
+- Can create reservations with Google Calendar sync
+- Can view all reservations and booking details
+- Can cancel any reservation
+- Can see who booked each time slot
+
+<Info>
+  Role determination logic is implemented in `internal/oauth/provider42.go`. The application checks the user's 42 profile to determine if they are staff or a student.
+</Info>
+
+---
+
+## Testing OAuth Flow
+
+<Steps>
+  <Step title="Start the Server">
+    ```bash
+    make run
+    ```
+  </Step>
+
+  <Step title="Test Login Endpoint">
+    Visit in your browser:
+    ```
+    http://localhost:8080/oauth/login
+    ```
+
+    You should be redirected to 42 Intra login.
+  </Step>
+
+  <Step title="Authorize Application">
+    Log in with your 42 credentials and authorize the application.
+  </Step>
+
+  <Step title="Verify Redirect">
+    After authorization, you should be redirected to:
+    ```
+    http://localhost:3000/auth/callback?token=eyJhbGc...
+    ```
+
+    The JWT token will be in the URL query parameter.
+  </Step>
+
+  <Step title="Decode Token (Optional)">
+    Use [jwt.io](https://jwt.io) to decode and inspect the token.
+  </Step>
+</Steps>
+
+---
+
+## Troubleshooting
+
+### Redirect URI Mismatch
+
+```
+The redirect_uri MUST match the registered callback URL
+```
+
+**Solution:** Ensure `REDIRECT_URI` in `.env` exactly matches the redirect URI registered in your 42 OAuth application.
+
+### Invalid Client
+
+```
+invalid_client
+```
+
+**Solution:** Verify `CLIENT_ID` and `SECRET` are correct.
+
+### Access Denied
+
+```
+access_denied
+```
+
+**Solution:** User declined authorization. This is expected behavior if the user clicks "Cancel" on the 42 authorization page.
+
+### CORS Error
+
+```
+Access to fetch blocked by CORS policy
+```
+
+**Solution:** Check CORS middleware configuration in `internal/api/api.go`. Ensure your frontend origin is allowed.
+
+### Invalid Token
+
+```
+401 Unauthorized: invalid or expired token
+```
+
+**Solution:** 
+- Check `JWT_SECRET` is the same value used to sign the token
+- Verify token hasn't expired
+- Ensure token is included in `Authorization: Bearer <token>` header
+
+---
+
+## Security Best Practices
+
+<Warning>
+  **Never expose your `CLIENT_SECRET` or `JWT_SECRET` in frontend code or version control.**
+</Warning>
+
+1. **Rotate Secrets Regularly**: Change your `JWT_SECRET` periodically
+2. **Use HTTPS in Production**: Always use secure connections for OAuth flows
+3. **Validate Redirect URIs**: Only allow whitelisted redirect URIs
+4. **Set Token Expiration**: JWT tokens should have reasonable expiration times
+5. **Secure Cookie Settings**: Use `HttpOnly` and `Secure` flags for session cookies
+
+---
+
+## Next Steps
+
+After configuring OAuth:
+
+1. [Set up email notifications](/setup/email-configuration)
+2. [Configure Google Calendar integration](/setup/google-calendar) (optional)
+3. [Explore the API endpoints](/api/overview)
