@@ -91,7 +91,7 @@ DB_URL=postgres://bookme:password@postgres:5432/bookme?sslmode=disable
 
 ### Connection String Format
 
-```
+```text
 postgres://[username]:[password]@[host]:[port]/[database]?[parameters]
 ```
 
@@ -116,7 +116,7 @@ BookMe uses SQL migrations to manage the database schema. The migrations are loc
 
 ### Migration Files
 
-```
+```text
 sql/schema/
 ├── 001_users.sql           # Users table
 ├── 002_rooms.sql           # Meeting rooms table
@@ -321,7 +321,7 @@ After running migrations, verify your setup:
     ```
 
     Check the logs for successful database connection:
-    ```
+    ```text
     INFO database connection established
     ```
   </Step>
@@ -363,7 +363,7 @@ psql -U bookme -d bookme < bookme_backup.sql
 
 ### Connection Refused
 
-```
+```text
 connection refused
 ```
 
@@ -375,7 +375,7 @@ sudo systemctl status postgresql
 
 ### Authentication Failed
 
-```
+```text
 password authentication failed
 ```
 
@@ -386,7 +386,7 @@ password authentication failed
 
 ### Database Does Not Exist
 
-```
+```text
 database "bookme" does not exist
 ```
 

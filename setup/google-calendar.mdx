@@ -110,7 +110,7 @@ Service accounts allow server-to-server authentication without user interaction.
 
     <Warning>
       This file contains sensitive credentials. Never commit it to version control. Add to `.gitignore`:
-      ```
+      ```text
       assets/book-me-service-account.json
       ```
     </Warning>
@@ -132,8 +132,8 @@ Service accounts allow server-to-server authentication without user interaction.
     1. Click on the calendar → **Settings and sharing**
     2. Scroll to **Share with specific people**
     3. Click **Add people**
-    4. Enter the service account email:
-       ```
+     4. Enter the service account email:
+       ```text
        book-me-calendar@your-project-id.iam.gserviceaccount.com
        ```
        (Found in the JSON credentials file under `client_email`)
@@ -236,7 +236,7 @@ Google Calendar events created by BookMe:
     ```
 
     Check logs for successful calendar service initialization:
-    ```
+    ```text
     INFO google calendar service initialized
     ```
   </Step>
@@ -285,7 +285,7 @@ BookMe includes a health check for the Google Calendar service. The health endpo
 - Permissions to access the configured calendar
 
 Access the health check at:
-```
+```text
 GET /api/v1/health
 ```
 
@@ -299,7 +299,7 @@ GET /api/v1/health
 
 ### Credentials File Not Found
 
-```
+```text
 failed to read credentials file
 ```
 
@@ -310,7 +310,7 @@ ls -la assets/book-me-service-account.json
 
 ### Invalid Credentials
 
-```
+```text
 failed to create JWT config
 ```
 
@@ -321,7 +321,7 @@ failed to create JWT config
 
 ### Calendar Not Found
 
-```
+```text
 calendar API unreachable: 404 Not Found
 ```
 
@@ -332,7 +332,7 @@ calendar API unreachable: 404 Not Found
 
 ### Permission Denied
 
-```
+```text
 failed to create event: 403 Forbidden
 ```
 

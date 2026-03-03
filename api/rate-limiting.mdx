@@ -126,12 +126,12 @@ When a client exceeds the rate limit, the API returns:
 **Status Code**: `429 Too Many Requests`
 
 **Headers**:
-```
+```text
 Retry-After: 6
 ```
 
 **Response Body**:
-```
+```text
 Rate limit exceeded. Please try again later.
 ```
 
@@ -216,7 +216,7 @@ Clients should respect the `Retry-After` header and implement exponential backof
 
 When rate limits are exceeded, the server logs warnings:
 
-```
+```text
 WARN rate limit exceeded ip=192.168.1.1 method=GET path=/oauth/login
 ```
 

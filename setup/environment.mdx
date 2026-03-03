@@ -250,7 +250,7 @@ SMTP_USE_TLS=true
 ### Missing Required Variables
 
 If you see an error like:
-```
+```text
 required environment variable not set key=DB_URL
 ```
 
@@ -259,7 +259,7 @@ Ensure the variable is set in your `.env` file or system environment.
 ### Invalid Duration Format
 
 If timeout values are invalid:
-```
+```text
 invalid int environment variable, using default
 ```
 
@@ -268,7 +268,7 @@ Use valid Go duration strings: `15s`, `1m`, `500ms`, etc.
 ### File Not Found
 
 If you see:
-```
+```text
 no .env file found, relying on system environment variables
 ```
 

@@ -35,10 +35,10 @@ BookMe uses **42 Intra OAuth 2.0** for authentication. This provides secure, sin
     ```
 
     <Note>
-      For production, use your production domain:
-      ```
-      https://api.yourdomain.com/oauth/callback
-      ```
+    For production, use your production domain:
+    ```text
+    https://api.yourdomain.com/oauth/callback
+    ```
     </Note>
   </Step>
 
@@ -109,14 +109,14 @@ BookMe implements the standard OAuth 2.0 authorization code flow:
 <Steps>
   <Step title="User Initiates Login">
     Frontend redirects user to:
-    ```
+    ```text
     GET /oauth/login
     ```
   </Step>
 
   <Step title="Redirect to 42">
     Backend redirects to 42 Intra with:
-    ```
+    ```text
     https://api.intra.42.fr/oauth/authorize?
       client_id=YOUR_CLIENT_ID&
       redirect_uri=http://localhost:8080/oauth/callback&
@@ -131,21 +131,21 @@ BookMe implements the standard OAuth 2.0 authorization code flow:
 
   <Step title="Receive Authorization Code">
     42 redirects back to:
-    ```
+    ```text
     GET /oauth/callback?code=AUTHORIZATION_CODE
     ```
   </Step>
 
   <Step title="Exchange for Access Token">
     Backend exchanges authorization code for access token:
-    ```
+    ```text
     POST https://api.intra.42.fr/oauth/token
     ```
   </Step>
 
   <Step title="Fetch User Info">
     Backend retrieves user profile:
-    ```
+    ```text
     GET https://api.intra.42.fr/v2/me
     ```
   </Step>
@@ -155,7 +155,7 @@ BookMe implements the standard OAuth 2.0 authorization code flow:
     - Creates or updates user in database
     - Generates JWT token
     - Redirects to frontend with token:
-    ```
+    ```text
     http://localhost:3000/auth/callback?token=JWT_TOKEN
     ```
   </Step>
@@ -316,7 +316,7 @@ BookMe assigns roles based on 42 Intra user type:
 
   <Step title="Test Login Endpoint">
     Visit in your browser:
-    ```
+    ```text
     http://localhost:8080/oauth/login
     ```
 
@@ -329,7 +329,7 @@ BookMe assigns roles based on 42 Intra user type:
 
   <Step title="Verify Redirect">
     After authorization, you should be redirected to:
-    ```
+    ```text
     http://localhost:3000/auth/callback?token=eyJhbGc...
     ```
 
@@ -347,7 +347,7 @@ BookMe assigns roles based on 42 Intra user type:
 
 ### Redirect URI Mismatch
 
-```
+```text
 The redirect_uri MUST match the registered callback URL
 ```
 
@@ -355,7 +355,7 @@ The redirect_uri MUST match the registered callback URL
 
 ### Invalid Client
 
-```
+```text
 invalid_client
 ```
 
@@ -363,7 +363,7 @@ invalid_client
 
 ### Access Denied
 
-```
+```text
 access_denied
 ```
 
@@ -371,7 +371,7 @@ access_denied
 
 ### CORS Error
 
-```
+```text
 Access to fetch blocked by CORS policy
 ```
 
@@ -379,7 +379,7 @@ Access to fetch blocked by CORS policy
 
 ### Invalid Token
 
-```
+```text
 401 Unauthorized: invalid or expired token
 ```
 
